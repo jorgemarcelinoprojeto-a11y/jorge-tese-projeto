@@ -113,6 +113,8 @@ export async function POST(req: NextRequest) {
 
     const systemPrompt = buildSystemPrompt(documentTitle, documentText || '');
 
+    console.log(`[AGENT-CHAT] Calling provider=${provider} model=${model} (msg: "${userMessage.slice(0, 60)}...")`);
+
     let raw = '';
     try {
       raw = await chatWithAgent({
@@ -123,8 +125,11 @@ export async function POST(req: NextRequest) {
         userMessage: userMessage.trim(),
       });
     } catch (e: any) {
+      console.error(`[AGENT-CHAT] provider=${provider} failed:`, e.message);
       return NextResponse.json({ error: e.message || 'AI call failed' }, { status: 500 });
     }
+
+    console.log(`[AGENT-CHAT] provider=${provider} model=${model} responded ${raw.length} chars`);
 
     const parsed = safeParseJSON(raw);
     if (parsed) {

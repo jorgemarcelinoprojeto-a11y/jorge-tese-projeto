@@ -69,6 +69,9 @@ type ChatMessage = {
   jobId?: string;
   newVersionId?: string;
   errorMessage?: string;
+  /** AI used to produce this message — shown to the user as proof. */
+  aiProvider?: AIProvider;
+  aiModel?: string;
   /** When the AI detected an edit-intent from free text, this is the precise
    * instruction the user can confirm to send to /ajustar. */
   pendingEditPrompt?: string;
@@ -385,6 +388,8 @@ export default function AgentModePage() {
       content: `Aplicando ajuste: "${instructions.slice(0, 80)}${instructions.length > 80 ? '...' : ''}"`,
       status: 'running',
       command: '/ajustar',
+      aiProvider: ai.provider,
+      aiModel: ai.model,
     });
 
     const res = await fetch(`/api/chapters/${chapterId}/adjust`, {
@@ -421,6 +426,8 @@ export default function AgentModePage() {
       role: 'assistant',
       content: 'Pensando...',
       status: 'running',
+      aiProvider: ai.provider,
+      aiModel: ai.model,
     });
 
     // Build history for context (last few assistant chat messages)
@@ -570,6 +577,8 @@ export default function AgentModePage() {
             content: `Iniciando tradução para ${args}...`,
             status: 'running',
             command: cmd,
+            aiProvider: ai.provider,
+            aiModel: ai.model,
           });
 
           const res = await fetch(`/api/chapters/${chapterId}/translate`, {
@@ -604,6 +613,7 @@ export default function AgentModePage() {
           const asstId = appendMessage({
             role: 'assistant', content: `Iniciando adaptação para estilo "${args}"...`,
             status: 'running', command: cmd,
+            aiProvider: ai.provider, aiModel: ai.model,
           });
 
           const res = await fetch(`/api/chapters/${chapterId}/adapt`, {
@@ -642,6 +652,7 @@ export default function AgentModePage() {
           const asstId = appendMessage({
             role: 'assistant', content: 'Verificando vigência das leis e normas citadas...',
             status: 'running', command: cmd,
+            aiProvider: ai.provider, aiModel: ai.model,
           });
 
           const res = await fetch(`/api/chapters/${chapterId}/versions/${selectedVersionId}/norms-update`, {
@@ -1076,12 +1087,23 @@ function MessageBubble({
   const errorInfo = isErrorMsg ? classifyAIError(message.content) : null;
   const isAIError = errorInfo && errorInfo.kind !== 'unknown';
 
+  const providerLabel: Record<string, string> = {
+    openai: 'OpenAI', gemini: 'Gemini', anthropic: 'Claude', grok: 'Grok',
+  };
+
   return (
     <div className="flex items-start gap-3">
       <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-red-500/30 to-red-700/20 border border-red-500/30 flex items-center justify-center">
         <Bot className="h-3.5 w-3.5 text-red-400" />
       </div>
       <div className="max-w-[80%] bg-white/[0.04] border border-white/10 rounded-2xl rounded-tl-sm px-4 py-2.5 space-y-2">
+        {message.aiProvider && (
+          <div className="flex items-center gap-1.5 text-[10px] text-gray-500 -mb-1">
+            <span className="inline-block w-1 h-1 rounded-full bg-red-500" />
+            <span className="font-medium">{providerLabel[message.aiProvider] ?? message.aiProvider}</span>
+            {message.aiModel && <span className="text-gray-600">· {message.aiModel}</span>}
+          </div>
+        )}
         {isAIError ? (
           <AIErrorBanner error={message.content} variant="full" />
         ) : (
