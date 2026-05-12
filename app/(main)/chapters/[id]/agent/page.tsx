@@ -360,9 +360,10 @@ export default function AgentModePage() {
           }
           return;
         }
-        // still running — update progress
+        // still running — update progress (job.progress is already 0-100, not 0-1)
         if (typeof job.progress === 'number') {
-          updateMessage(asstId, { content: `${opLabel} em andamento... ${Math.round(job.progress * 100)}%` });
+          const pct = job.progress > 1 ? Math.round(job.progress) : Math.round(job.progress * 100);
+          updateMessage(asstId, { content: `${opLabel} em andamento... ${Math.min(100, pct)}%` });
         }
       } catch {}
     }

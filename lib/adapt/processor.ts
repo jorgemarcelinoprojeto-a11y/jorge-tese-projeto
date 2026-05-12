@@ -22,7 +22,11 @@ export async function analyzeDocumentForAdaptation(
   model: string,
   apiKey: string,
   onProgress?: (currentSection: number, totalSections: number, currentBatch?: number, totalBatches?: number) => Promise<void>,
-  onSavePartial?: (suggestions: AdaptationSuggestion[], currentSection: number, totalSections: number) => Promise<void>
+  onSavePartial?: (suggestions: AdaptationSuggestion[], currentSection: number, totalSections: number) => Promise<void>,
+  /** Optional checkpoint that throws if the caller wants to abort.
+   * Called between sections AND between batches inside each section so a
+   * cancel request stops the next paid AI call. */
+  cancelCheck?: () => void
 ): Promise<AdaptationSuggestion[]> {
   console.log('[ADAPT] Extracting document structure...');
 
@@ -38,6 +42,7 @@ export async function analyzeDocumentForAdaptation(
   const BATCH_SIZE = 15;
 
   for (let i = 0; i < structure.sections.length; i++) {
+    cancelCheck?.();
     const section = structure.sections[i];
     const sectionParagraphs = paragraphs
       .slice(section.startParagraphIndex, section.endParagraphIndex + 1)
@@ -54,6 +59,7 @@ export async function analyzeDocumentForAdaptation(
     // Process section in batches
     let batchIndex = 0;
     for (let batchStart = 0; batchStart < sectionParagraphs.length; batchStart += BATCH_SIZE) {
+      cancelCheck?.();
       batchIndex++;
       const batchEnd = Math.min(batchStart + BATCH_SIZE, sectionParagraphs.length);
       const batch = sectionParagraphs.slice(batchStart, batchEnd);

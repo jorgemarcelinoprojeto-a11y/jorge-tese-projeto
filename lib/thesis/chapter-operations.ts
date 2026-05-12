@@ -623,7 +623,8 @@ export async function executeAdjustOperation(
       provider as 'openai' | 'gemini' | 'grok' | 'anthropic',
       model,
       apiKey,
-      useGrounding
+      useGrounding,
+      () => throwIfCancelled(jobId)
     );
 
     await updateOperationJob(jobId, { progress: 70 });
@@ -772,7 +773,10 @@ export async function executeAdaptOperation(
       targetAudience,
       provider as 'openai' | 'gemini' | 'grok' | 'anthropic',
       model,
-      apiKey
+      apiKey,
+      undefined, // onProgress
+      undefined, // onSavePartial
+      () => throwIfCancelled(jobId)
     );
 
     console.log(`[CHAPTER-ADAPT] Generated ${suggestions.length} suggestions`);

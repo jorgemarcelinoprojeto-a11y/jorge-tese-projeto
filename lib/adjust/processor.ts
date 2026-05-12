@@ -20,7 +20,10 @@ export async function analyzeDocumentForAdjustments(
   provider: 'openai' | 'gemini' | 'grok' | 'anthropic',
   model: string,
   apiKey: string,
-  useGrounding: boolean = false
+  useGrounding: boolean = false,
+  /** Optional checkpoint that throws if the caller wants to abort.
+   * Called between sections AND between batches inside each section. */
+  cancelCheck?: () => void
 ): Promise<AdjustSuggestion[]> {
   console.log('[ADJUST] Extracting document structure...');
 
@@ -36,6 +39,7 @@ export async function analyzeDocumentForAdjustments(
   const BATCH_SIZE = 20;
 
   for (let i = 0; i < structure.sections.length; i++) {
+    cancelCheck?.();
     const section = structure.sections[i];
     const sectionParagraphs = paragraphs
       .slice(section.startParagraphIndex, section.endParagraphIndex + 1)
@@ -46,6 +50,7 @@ export async function analyzeDocumentForAdjustments(
 
     // Process section in batches
     for (let batchStart = 0; batchStart < sectionParagraphs.length; batchStart += BATCH_SIZE) {
+      cancelCheck?.();
       const batchEnd = Math.min(batchStart + BATCH_SIZE, sectionParagraphs.length);
       const batch = sectionParagraphs.slice(batchStart, batchEnd);
 
