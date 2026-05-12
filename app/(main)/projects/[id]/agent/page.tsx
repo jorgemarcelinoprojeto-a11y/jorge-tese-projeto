@@ -59,6 +59,8 @@ type ChatMessage = {
   status?: 'pending' | 'running' | 'success' | 'error';
   jobId?: string;
   resultHref?: string;
+  /** When AI detected an edit-intent from free text. */
+  pendingEditPrompt?: string;
 };
 
 type SlashCommand = {
@@ -71,9 +73,10 @@ type SlashCommand = {
 };
 
 const COMMANDS: SlashCommand[] = [
+  { name: '/perguntar', args: '<pergunta>',   example: '/perguntar do que se trata',      description: 'Pergunte algo sobre o documento — sem editar',  icon: <Bot         className="h-4 w-4" />, color: 'text-cyan-400' },
   { name: '/traduzir',  args: '<idioma>',     example: '/traduzir inglês',                description: 'Traduz o documento para outro idioma',          icon: <Languages   className="h-4 w-4" />, color: 'text-purple-400' },
   { name: '/adaptar',   args: '<estilo>',     example: '/adaptar simplificado',           description: 'Adapta o tom (academic, professional, simplified)', icon: <Wand2       className="h-4 w-4" />, color: 'text-pink-400' },
-  { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',   description: 'Ajuste livre via prompt',                          icon: <Sliders     className="h-4 w-4" />, color: 'text-orange-400' },
+  { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',   description: 'Aplica uma edição: IA cria uma nova versão',     icon: <Sliders     className="h-4 w-4" />, color: 'text-orange-400' },
   { name: '/revisar',   args: '',             example: '/revisar',                        description: 'Verifica se leis citadas continuam vigentes',     icon: <SearchCheck className="h-4 w-4" />, color: 'text-yellow-400' },
   { name: '/limpar',    args: '',             example: '/limpar',                         description: 'Limpa a conversa',                                  icon: <Trash2      className="h-4 w-4" />, color: 'text-gray-400' },
 ];
@@ -261,6 +264,80 @@ export default function ProjectAgentPage() {
     }
   };
 
+  const runAdjustPipeline = async (instructions: string) => {
+    if (!selectedDocId) return;
+    if (!currentAI) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo.', status: 'error' }); return; }
+
+    const asstId = appendMessage({
+      role: 'assistant', command: '/ajustar', status: 'running',
+      content: `Aplicando ajuste: "${instructions.slice(0, 80)}${instructions.length > 80 ? '...' : ''}"`,
+    });
+
+    const res = await fetch(`/api/adjust`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        documentId: selectedDocId, instructions, creativity: 5,
+        provider: currentAI.provider, model: currentAI.model, useGrounding: false,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      updateMessage(asstId, { status: 'error', content: err.error || 'Falha ao iniciar ajuste' });
+      return;
+    }
+    const data = await res.json();
+    updateMessage(asstId, {
+      status: 'success',
+      content: 'Ajuste iniciado. Acompanhe na página de resultado.',
+      jobId: data.jobId,
+      resultHref: `/adjustments/${data.jobId}`,
+    });
+  };
+
+  const runChat = async (userText: string) => {
+    if (!docText) {
+      appendMessage({ role: 'system', content: 'Aguarde o documento carregar antes de conversar.', status: 'error' });
+      return;
+    }
+    if (!currentAI) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo.', status: 'error' }); return; }
+
+    const asstId = appendMessage({ role: 'assistant', content: 'Pensando...', status: 'running' });
+
+    const history = messages
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && (!m.command || m.command === '/perguntar'))
+      .slice(-8)
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+
+    try {
+      const res = await fetch('/api/agent/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: currentAI.provider,
+          model: currentAI.model,
+          documentTitle: docDetail?.title,
+          documentText: docText,
+          history,
+          userMessage: userText,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        updateMessage(asstId, { status: 'error', content: err.error || 'Falha ao conversar com a IA' });
+        return;
+      }
+      const data = await res.json();
+      if (data.kind === 'edit' && data.editPrompt) {
+        updateMessage(asstId, { status: 'success', content: data.reply, pendingEditPrompt: data.editPrompt, command: '/perguntar' });
+      } else {
+        updateMessage(asstId, { status: 'success', content: data.reply, command: '/perguntar' });
+      }
+    } catch (e: any) {
+      updateMessage(asstId, { status: 'error', content: e.message || 'Erro ao conversar' });
+    }
+  };
+
   const handleCommand = async (raw: string) => {
     const trimmed = raw.trim();
     if (!trimmed) return;
@@ -280,8 +357,10 @@ export default function ProjectAgentPage() {
       cmd = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
       args = spaceIdx === -1 ? '' : trimmed.slice(spaceIdx + 1).trim();
     } else {
-      cmd = '/ajustar';
-      args = trimmed;
+      // Free text -> chat with edit-intent detection
+      setSending(true);
+      try { await runChat(trimmed); } finally { setSending(false); }
+      return;
     }
 
     setSending(true);
@@ -289,6 +368,15 @@ export default function ProjectAgentPage() {
       switch (cmd) {
         case '/limpar': {
           setMessages([]);
+          return;
+        }
+
+        case '/perguntar': {
+          if (!args) {
+            appendMessage({ role: 'system', content: 'Use: /perguntar <sua pergunta>.', status: 'error' });
+            return;
+          }
+          await runChat(args);
           return;
         }
 
@@ -368,33 +456,7 @@ export default function ProjectAgentPage() {
             appendMessage({ role: 'system', content: 'Descreva o ajuste desejado.', status: 'error' });
             return;
           }
-          if (!currentAI) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo.', status: 'error' }); return; }
-
-          const asstId = appendMessage({
-            role: 'assistant', command: cmd, status: 'running',
-            content: `Aplicando ajuste: "${args.slice(0, 80)}${args.length > 80 ? '...' : ''}"`,
-          });
-
-          const res = await fetch(`/api/adjust`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              documentId: selectedDocId, instructions: args, creativity: 5,
-              provider: currentAI.provider, model: currentAI.model, useGrounding: false,
-            }),
-          });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            updateMessage(asstId, { status: 'error', content: err.error || 'Falha ao iniciar ajuste' });
-            return;
-          }
-          const data = await res.json();
-          updateMessage(asstId, {
-            status: 'success',
-            content: `Ajuste iniciado. Acompanhe na página de resultado.`,
-            jobId: data.jobId,
-            resultHref: `/adjustments/${data.jobId}`,
-          });
+          await runAdjustPipeline(args);
           return;
         }
 
@@ -629,7 +691,15 @@ export default function ProjectAgentPage() {
                 <WelcomeBlock onPick={(cmd) => { setInput(cmd + ' '); inputRef.current?.focus(); }} />
               )}
               {messages.map((msg) => (
-                <MessageBubble key={msg.id} message={msg} />
+                <MessageBubble
+                  key={msg.id}
+                  message={msg}
+                  onApplyPendingEdit={(prompt) => {
+                    updateMessage(msg.id, { pendingEditPrompt: undefined });
+                    setSending(true);
+                    runAdjustPipeline(prompt).finally(() => setSending(false));
+                  }}
+                />
               ))}
             </div>
           </div>
@@ -661,7 +731,7 @@ export default function ProjectAgentPage() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Digite uma instrução ou /traduzir, /adaptar, /ajustar, /revisar..."
+                  placeholder="Pergunte algo sobre o documento, ou use /ajustar, /traduzir, /adaptar..."
                   rows={1}
                   disabled={sending}
                   className="flex-1 bg-transparent text-white placeholder:text-gray-600 text-sm resize-none outline-none py-1.5 max-h-32"
@@ -712,7 +782,10 @@ function WelcomeBlock({ onPick }: { onPick: (cmd: string) => void }) {
       </div>
       <div>
         <h2 className="text-xl font-semibold text-white mb-1">Como posso ajudar com este documento?</h2>
-        <p className="text-sm text-gray-400">Use comandos com <code className="text-red-400">/</code> ou apenas descreva o que quer fazer.</p>
+        <p className="text-sm text-gray-400 max-w-md mx-auto leading-relaxed">
+          Faça uma <strong className="text-cyan-400">pergunta</strong> sobre o documento (eu respondo aqui sem mexer no texto)
+          ou use um <code className="text-red-400">/comando</code> para <strong className="text-red-400">editar</strong> e gerar uma nova versão.
+        </p>
       </div>
       <div className="grid grid-cols-2 gap-2 max-w-lg mx-auto">
         {COMMANDS.slice(0, 4).map((c) => (
@@ -733,7 +806,12 @@ function WelcomeBlock({ onPick }: { onPick: (cmd: string) => void }) {
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message, onApplyPendingEdit,
+}: {
+  message: ChatMessage;
+  onApplyPendingEdit?: (prompt: string) => void;
+}) {
   const isErrorMsg = message.status === 'error';
   const errorInfo = isErrorMsg ? classifyAIError(message.content) : null;
   const isAIError = errorInfo && errorInfo.kind !== 'unknown';
@@ -793,6 +871,26 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               <ExternalLink className="h-3 w-3" />
               Ver resultado e aplicar
             </Link>
+          </div>
+        )}
+
+        {message.pendingEditPrompt && onApplyPendingEdit && (
+          <div className="pt-1 space-y-2 border-t border-white/10 mt-2">
+            <p className="text-[11px] text-gray-500 uppercase tracking-wider font-semibold">Edição sugerida</p>
+            <p className="text-xs text-gray-300 italic bg-white/[0.03] border border-white/10 rounded-md px-3 py-2">
+              "{message.pendingEditPrompt}"
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => onApplyPendingEdit(message.pendingEditPrompt!)}
+                className="h-7 text-xs bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800"
+              >
+                <Sliders className="h-3 w-3 mr-1" />
+                Aplicar edição
+              </Button>
+              <span className="text-[11px] text-gray-500">cria uma nova versão</span>
+            </div>
           </div>
         )}
 
