@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, BookOpen, FileText, Clock, Layers } from 'lucide-react';
+import { ArrowLeft, BookOpen, FileText, Clock, Layers, Bot, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { ChapterChat } from '@/components/thesis/chapter-chat';
@@ -163,7 +163,7 @@ export default function ChapterPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center justify-between gap-4">
         <Button
           variant="ghost"
           size="sm"
@@ -172,6 +172,17 @@ export default function ChapterPage() {
           <ArrowLeft className="h-4 w-4 mr-2" />
           Voltar para Tese
         </Button>
+
+        <Link href={`/chapters/${chapterId}/agent`}>
+          <Button
+            size="sm"
+            className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white shadow-lg shadow-red-500/20 gap-2"
+          >
+            <Bot className="h-4 w-4" />
+            Abrir Modo Agente
+            <Sparkles className="h-3 w-3" />
+          </Button>
+        </Link>
       </div>
 
       {/* Chapter Info */}
