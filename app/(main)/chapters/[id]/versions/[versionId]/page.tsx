@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   ArrowLeft, FileText, Layers, Download, Languages, Sliders, Wand2,
-  SearchCheck, Loader2, Info, Clock, Eye
+  SearchCheck, Loader2, Info, Clock, Eye, Bot, Sparkles
 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
@@ -297,11 +297,24 @@ export default function ChapterVersionPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      {/* Back */}
-      <Button variant="ghost" size="sm" onClick={() => router.push(`/chapters/${chapterId}`)}>
-        <ArrowLeft className="h-4 w-4 mr-2" />
-        Voltar para Capítulo
-      </Button>
+      {/* Back + Agent CTA */}
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" size="sm" onClick={() => router.push(`/chapters/${chapterId}`)}>
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Voltar para Capítulo
+        </Button>
+
+        <Link href={`/chapters/${chapterId}/agent`}>
+          <Button
+            size="sm"
+            className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white shadow-lg shadow-red-500/20 gap-2"
+          >
+            <Bot className="h-4 w-4" />
+            Modo Agente
+            <Sparkles className="h-3 w-3" />
+          </Button>
+        </Link>
+      </div>
 
       {/* Title row */}
       <div className="flex items-start justify-between gap-4">
@@ -674,19 +687,24 @@ export default function ChapterVersionPage() {
   );
 }
 
-function OperationCard({
-  icon,
-  iconBg,
-  title,
-  description,
-}: {
+type OperationCardProps = {
   icon: React.ReactNode;
   iconBg: string;
   title: string;
   description: string;
-}) {
+} & React.ButtonHTMLAttributes<HTMLButtonElement>;
+
+const OperationCard = forwardRef<HTMLButtonElement, OperationCardProps>(function OperationCard(
+  { icon, iconBg, title, description, ...buttonProps },
+  ref
+) {
   return (
-    <button className="group flex items-start gap-3 p-4 rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.07] hover:border-white/20 transition-all text-left w-full">
+    <button
+      ref={ref}
+      type="button"
+      {...buttonProps}
+      className="group flex items-start gap-3 p-4 rounded-xl border border-white/10 bg-white/[0.03] hover:bg-white/[0.07] hover:border-white/20 transition-all text-left w-full"
+    >
       <div className={cn('p-2 rounded-lg flex-shrink-0 transition-opacity group-hover:opacity-100 opacity-80', iconBg)}>
         {icon}
       </div>
@@ -696,7 +714,7 @@ function OperationCard({
       </div>
     </button>
   );
-}
+});
 
 function VersionPill({ version, chapterId }: { version: ChapterVersion; chapterId: string }) {
   const router = useRouter();

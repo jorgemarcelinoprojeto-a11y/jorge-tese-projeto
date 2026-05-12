@@ -99,12 +99,26 @@ export function ImportDocumentDialog({ open, onOpenChange, onCreated }: ImportDo
         if (!projectRes.ok) throw new Error('Falha ao criar projeto');
         const projectData = await projectRes.json();
 
+        // Step 1: upload raw file
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('projectId', projectData.project.id);
-        formData.append('name', file.name);
 
-        await fetch('/api/documents', { method: 'POST', body: formData });
+        const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+        if (!uploadRes.ok) throw new Error('Falha no upload do arquivo');
+        const { documentId, filePath, fileName } = await uploadRes.json();
+
+        // Step 2: ingest into project
+        const ingestRes = await fetch('/api/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            documentId,
+            filePath,
+            fileName,
+            projectId: projectData.project.id,
+          }),
+        });
+        if (!ingestRes.ok) throw new Error('Falha no processamento do documento');
 
         toast.success(`Projeto "${title}" criado com sucesso!`);
         reset();
@@ -167,38 +181,60 @@ export function ImportDocumentDialog({ open, onOpenChange, onCreated }: ImportDo
               <p className="text-sm text-gray-400">
                 Comece fazendo o upload do seu documento para a plataforma.
               </p>
-              <label
-                className={cn(
-                  'flex flex-col items-center justify-center w-full h-44 border-2 border-dashed rounded-xl cursor-pointer transition-all duration-200',
-                  dragOver
-                    ? 'border-red-500 bg-red-500/10'
-                    : 'border-white/15 bg-white/[0.03] hover:border-red-500/40 hover:bg-white/[0.06]'
-                )}
-                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-                onDragLeave={() => setDragOver(false)}
-                onDrop={handleDrop}
-              >
-                <div className={cn(
-                  'p-4 rounded-full mb-3 transition-colors',
-                  dragOver ? 'bg-red-500/20' : 'bg-white/5'
-                )}>
-                  <Upload className={cn('h-7 w-7 transition-colors', dragOver ? 'text-red-400' : 'text-gray-500')} />
+
+              {file ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 p-4 bg-white/5 border border-white/10 rounded-xl">
+                    <FileText className="h-8 w-8 text-red-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white truncate">{file.name}</p>
+                      <p className="text-xs text-gray-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+                    </div>
+                    <button onClick={() => setFile(null)} className="text-gray-500 hover:text-white" title="Remover arquivo">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <Button
+                    onClick={() => setStep('choose-type')}
+                    className="w-full bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white"
+                  >
+                    Continuar
+                  </Button>
                 </div>
-                <p className="text-sm font-medium text-gray-300">Arraste seu arquivo aqui</p>
-                <p className="text-xs text-gray-500 mt-1">ou clique para selecionar</p>
-                <span className="mt-3 text-xs text-gray-600 bg-white/5 px-3 py-1 rounded-full border border-white/10">
-                  PDF · DOCX · TXT
-                </span>
-                <input
-                  type="file"
-                  className="hidden"
-                  accept=".pdf,.docx,.doc,.txt"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) handleFileSelect(f);
-                  }}
-                />
-              </label>
+              ) : (
+                <label
+                  className={cn(
+                    'flex flex-col items-center justify-center w-full h-44 border-2 border-dashed rounded-xl cursor-pointer transition-all duration-200',
+                    dragOver
+                      ? 'border-red-500 bg-red-500/10'
+                      : 'border-white/15 bg-white/[0.03] hover:border-red-500/40 hover:bg-white/[0.06]'
+                  )}
+                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={handleDrop}
+                >
+                  <div className={cn(
+                    'p-4 rounded-full mb-3 transition-colors',
+                    dragOver ? 'bg-red-500/20' : 'bg-white/5'
+                  )}>
+                    <Upload className={cn('h-7 w-7 transition-colors', dragOver ? 'text-red-400' : 'text-gray-500')} />
+                  </div>
+                  <p className="text-sm font-medium text-gray-300">Arraste seu arquivo aqui</p>
+                  <p className="text-xs text-gray-500 mt-1">ou clique para selecionar</p>
+                  <span className="mt-3 text-xs text-gray-600 bg-white/5 px-3 py-1 rounded-full border border-white/10">
+                    PDF · DOCX · TXT
+                  </span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.docx,.doc,.txt"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleFileSelect(f);
+                    }}
+                  />
+                </label>
+              )}
             </div>
           )}
 
