@@ -10,12 +10,36 @@ import { SupportedLanguage } from '@/lib/translation/types';
 import { processChapterVersion } from './chapter-processor';
 import { processReferences, formatReferencesForContext, type ReferenceInput } from './reference-processor';
 import type { OperationContextSummary } from './types';
+import { throwIfCancelled, isCancelledError, CANCELLATION_MARKER, clearCancellation } from '@/lib/job-cancellation';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { randomUUID } from 'crypto';
 
 export type ChapterOperation = 'improve' | 'translate' | 'adjust' | 'adapt' | 'update';
+
+/**
+ * Persist cancellation as an error with a recognizable marker so the UI can
+ * differentiate it from a real failure. Returns true if the error was a
+ * cancellation (caller can decide whether to swallow the throw).
+ */
+async function recordCancellationIfApplicable(jobId: string, error: unknown, opLabel: string): Promise<boolean> {
+  if (isCancelledError(error)) {
+    console.log(`[${opLabel}] Job ${jobId} cancelled by user — stopping pipeline`);
+    try {
+      await updateOperationJob(jobId, {
+        status: 'error',
+        errorMessage: `${CANCELLATION_MARKER} Cancelado pelo usuário antes de mais chamadas à IA.`,
+      });
+    } catch (e) {
+      console.warn('[CANCEL] Failed to record cancellation in DB:', e);
+    } finally {
+      clearCancellation(jobId);
+    }
+    return true;
+  }
+  return false;
+}
 
 export interface OperationJobStatus {
   id: string;
@@ -206,6 +230,9 @@ export async function executeImproveOperation(
     const BATCH_SIZE = 20;
 
     for (let i = 0; i < structure.sections.length; i++) {
+      // Cancellation checkpoint between sections
+      throwIfCancelled(jobId);
+
       const section = structure.sections[i];
       const sectionParagraphs = paragraphs
         .slice(section.startParagraphIndex, section.endParagraphIndex + 1)
@@ -265,10 +292,13 @@ export async function executeImproveOperation(
     return newVersionId;
 
   } catch (error: any) {
+    if (await recordCancellationIfApplicable(jobId, error, 'CHAPTER-IMPROVE')) {
+      return '';
+    }
     console.error('[CHAPTER-IMPROVE] Error:', error);
     await updateOperationJob(jobId, {
       status: 'error',
-      error_message: error.message
+      errorMessage: error.message
     });
     throw error;
   }
@@ -344,6 +374,9 @@ export async function executeTranslateOperation(
     const BATCH_SIZE = 10; // Smaller batches for translation
 
     for (let i = 0; i < structure.sections.length; i++) {
+      // Cancellation checkpoint between sections — stops before paying for next section's batches
+      throwIfCancelled(jobId);
+
       const section = structure.sections[i];
       const sectionParagraphs = paragraphs
         .slice(section.startParagraphIndex, section.endParagraphIndex + 1)
@@ -354,6 +387,9 @@ export async function executeTranslateOperation(
 
       // Process section in batches
       for (let batchStart = 0; batchStart < sectionParagraphs.length; batchStart += BATCH_SIZE) {
+        // Cancellation checkpoint between batches — finest-grained guard before paid AI call
+        throwIfCancelled(jobId);
+
         const batchEnd = Math.min(batchStart + BATCH_SIZE, sectionParagraphs.length);
         const batch = sectionParagraphs.slice(batchStart, batchEnd);
 
@@ -433,10 +469,13 @@ export async function executeTranslateOperation(
     return newVersionId;
 
   } catch (error: any) {
+    if (await recordCancellationIfApplicable(jobId, error, 'CHAPTER-TRANSLATE')) {
+      return ''; // cancelled — no new version
+    }
     console.error('[CHAPTER-TRANSLATE] Error:', error);
     await updateOperationJob(jobId, {
       status: 'error',
-      error_message: error.message
+      errorMessage: error.message
     });
     throw error;
   }
@@ -648,10 +687,13 @@ export async function executeAdjustOperation(
     return newVersionId;
 
   } catch (error: any) {
+    if (await recordCancellationIfApplicable(jobId, error, 'CHAPTER-ADJUST')) {
+      return '';
+    }
     console.error('[CHAPTER-ADJUST] Error:', error);
     await updateOperationJob(jobId, {
       status: 'error',
-      error_message: error.message
+      errorMessage: error.message
     });
     throw error;
   }
@@ -798,6 +840,9 @@ export async function executeAdaptOperation(
     return newVersionId;
 
   } catch (error: any) {
+    if (await recordCancellationIfApplicable(jobId, error, 'CHAPTER-ADAPT')) {
+      return '';
+    }
     console.error('[CHAPTER-ADAPT] Error:', error);
     console.error('[CHAPTER-ADAPT] Error stack:', error.stack);
     console.error('[CHAPTER-ADAPT] Error details:', {
@@ -810,7 +855,7 @@ export async function executeAdaptOperation(
     });
     await updateOperationJob(jobId, {
       status: 'error',
-      error_message: error.message || 'Unknown error occurred'
+      errorMessage: error.message || 'Unknown error occurred'
     });
     throw error;
   }

@@ -10,12 +10,13 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   ArrowLeft, Send, FileText, PanelLeftClose, PanelLeftOpen, Sparkles,
   Loader2, Trash2, Languages, Wand2, Sliders, SearchCheck,
-  CheckCircle2, AlertCircle, Bot, User as UserIcon, Download, Folder, Cpu, ExternalLink
+  CheckCircle2, AlertCircle, Bot, User as UserIcon, Download, Folder, Cpu, ExternalLink, Ban
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { AIErrorBanner } from '@/components/ai-error-banner';
 import { classifyAIError } from '@/lib/ai-error-message';
+import { cancelJobRequest } from '@/components/jobs-status-button';
 
 type AIProvider = 'openai' | 'gemini' | 'grok' | 'anthropic';
 
@@ -851,7 +852,7 @@ function MessageBubble({
         )}
 
         {message.status === 'running' && (
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <div className="flex items-center gap-2 text-xs text-gray-500">
               <Loader2 className="h-3 w-3 animate-spin" />
               Processando...
@@ -859,6 +860,27 @@ function MessageBubble({
             <p className="text-[11px] text-gray-600 leading-relaxed">
               Pode sair desta página — a operação continua no servidor. Veja o status em <strong className="text-gray-500">Operações</strong> no topo.
             </p>
+            {message.jobId && message.command && (
+              <button
+                onClick={async (e) => {
+                  e.preventDefault();
+                  if (!confirm('Cancelar esta operação? A IA para na próxima chamada — você economiza créditos a partir daí.')) return;
+                  // Map command -> type for the cancel endpoint
+                  const typeMap: Record<string, 'translate' | 'adjust' | 'adapt' | 'norms-update'> = {
+                    '/traduzir': 'translate',
+                    '/adaptar': 'adapt',
+                    '/ajustar': 'adjust',
+                    '/revisar': 'norms-update',
+                  };
+                  const type = typeMap[message.command!];
+                  if (type) await cancelJobRequest(message.jobId!, type);
+                }}
+                className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-red-400 transition-colors"
+              >
+                <Ban className="h-3 w-3" />
+                Cancelar
+              </button>
+            )}
           </div>
         )}
 
