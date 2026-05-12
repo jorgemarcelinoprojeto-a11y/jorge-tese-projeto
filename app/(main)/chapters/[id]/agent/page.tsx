@@ -977,9 +977,14 @@ function MessageBubble({
         )}
 
         {message.status === 'running' && (
-          <div className="flex items-center gap-2 text-xs text-gray-500">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Processando...
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Processando...
+            </div>
+            <p className="text-[11px] text-gray-600 leading-relaxed">
+              Pode sair desta página — a operação continua no servidor. Veja o status em <strong className="text-gray-500">Operações</strong> no topo.
+            </p>
           </div>
         )}
 
