@@ -228,7 +228,8 @@ export default function HomePage() {
                     {filteredTheses.map((thesis, index) => (
                       <DocumentCard
                         key={thesis.id}
-                        href={`/theses/${thesis.id}`}
+                        href={`/theses/${thesis.id}/agent`}
+                        secondaryHref={`/theses/${thesis.id}`}
                         icon={<GraduationCap className="h-6 w-6 text-red-500" />}
                         title={thesis.title}
                         description={thesis.description}
@@ -261,7 +262,8 @@ export default function HomePage() {
                     {filteredProjects.map((project, index) => (
                       <DocumentCard
                         key={project.id}
-                        href={`/projects/${project.id}`}
+                        href={`/projects/${project.id}/agent`}
+                        secondaryHref={`/projects/${project.id}`}
                         icon={<Folder className="h-6 w-6 text-red-500" />}
                         title={project.name}
                         description={project.description}
@@ -295,6 +297,7 @@ export default function HomePage() {
 
 function DocumentCard({
   href,
+  secondaryHref,
   icon,
   title,
   description,
@@ -302,6 +305,7 @@ function DocumentCard({
   index,
 }: {
   href: string;
+  secondaryHref?: string;
   icon: React.ReactNode;
   title: string;
   description?: string;
@@ -309,35 +313,45 @@ function DocumentCard({
   index: number;
 }) {
   return (
-    <Link
-      href={href}
-      className="group"
+    <div
+      className="group relative"
       style={{ animation: `fadeInUp 0.4s ease-out ${index * 0.07}s both` }}
     >
-      <div className="relative h-full">
-        <div className="absolute -inset-0.5 bg-gradient-to-r from-red-600 to-red-800 rounded-2xl opacity-0 group-hover:opacity-15 blur transition-all duration-300" />
-        <Card className="relative h-full bg-gradient-to-br from-white/[0.07] to-white/[0.02] backdrop-blur-xl border-white/10 hover:border-red-500/30 transition-all duration-300 group-hover:shadow-xl group-hover:shadow-red-500/10 group-hover:-translate-y-0.5 cursor-pointer overflow-hidden">
-          <CardHeader className="relative pb-3">
-            <div className="flex items-start justify-between mb-3">
-              <div className="p-2.5 bg-gradient-to-br from-red-500/15 to-red-600/10 rounded-xl border border-red-500/20 group-hover:border-red-500/40 transition-colors">
-                {icon}
+      <Link href={href} className="block">
+        <div className="relative h-full">
+          <div className="absolute -inset-0.5 bg-gradient-to-r from-red-600 to-red-800 rounded-2xl opacity-0 group-hover:opacity-15 blur transition-all duration-300" />
+          <Card className="relative h-full bg-gradient-to-br from-white/[0.07] to-white/[0.02] backdrop-blur-xl border-white/10 hover:border-red-500/30 transition-all duration-300 group-hover:shadow-xl group-hover:shadow-red-500/10 group-hover:-translate-y-0.5 cursor-pointer overflow-hidden">
+            <CardHeader className="relative pb-3">
+              <div className="flex items-start justify-between mb-3">
+                <div className="p-2.5 bg-gradient-to-br from-red-500/15 to-red-600/10 rounded-xl border border-red-500/20 group-hover:border-red-500/40 transition-colors">
+                  {icon}
+                </div>
+                <Badge variant="secondary" className="bg-white/10 text-gray-300 border-white/10 text-xs">
+                  <FileText className="h-3 w-3 mr-1" />
+                  {badge}
+                </Badge>
               </div>
-              <Badge variant="secondary" className="bg-white/10 text-gray-300 border-white/10 text-xs">
-                <FileText className="h-3 w-3 mr-1" />
-                {badge}
-              </Badge>
-            </div>
-            <CardTitle className="line-clamp-1 text-base font-bold text-white group-hover:text-red-400 transition-colors">
-              {title}
-            </CardTitle>
-            <CardDescription className="line-clamp-2 text-gray-400 text-sm leading-relaxed">
-              {description || 'Sem descrição'}
-            </CardDescription>
-          </CardHeader>
-          <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-red-500/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-        </Card>
-      </div>
-    </Link>
+              <CardTitle className="line-clamp-1 text-base font-bold text-white group-hover:text-red-400 transition-colors">
+                {title}
+              </CardTitle>
+              <CardDescription className="line-clamp-2 text-gray-400 text-sm leading-relaxed">
+                {description || 'Sem descrição'}
+              </CardDescription>
+            </CardHeader>
+            <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-red-500/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+          </Card>
+        </div>
+      </Link>
+      {secondaryHref && (
+        <Link
+          href={secondaryHref}
+          className="absolute bottom-3 right-3 z-10 text-[10px] text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-sm px-2 py-1 rounded-md border border-white/10"
+          onClick={(e) => e.stopPropagation()}
+        >
+          Modo clássico
+        </Link>
+      )}
+    </div>
   );
 }
 
