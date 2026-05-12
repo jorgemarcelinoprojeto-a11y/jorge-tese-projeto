@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { jsonNoStore } from '@/lib/json-no-store-response';
+import { isCancellationErrorMessage } from '@/lib/job-cancellation';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -13,7 +14,7 @@ type ActiveJob = {
   id: string;
   type: 'translate' | 'adjust' | 'adapt' | 'improve' | 'norms-update' | 'chapter-operation';
   operation?: string;        // for chapter-operation: 'translate' | 'improve' | ...
-  status: 'pending' | 'running' | 'completed' | 'error';
+  status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
   progress: number;          // 0-100
   errorMessage?: string;
   createdAt: string;
@@ -30,7 +31,11 @@ type ActiveJob = {
 
 const RECENT_WINDOW_HOURS = 6;
 
-function normalizeStatus(raw: string): ActiveJob['status'] {
+function normalizeStatus(raw: string, errorMessage?: string | null): ActiveJob['status'] {
+  // Cancellation is encoded as status='error' + a marker in errorMessage,
+  // because the DB CHECK constraint does not allow 'cancelled'.
+  if (isCancellationErrorMessage(errorMessage)) return 'cancelled';
+
   const s = (raw || '').toLowerCase();
   if (s === 'completed' || s === 'success' || s === 'done') return 'completed';
   if (s === 'error' || s === 'failed') return 'error';
@@ -73,7 +78,7 @@ export async function GET(_req: NextRequest) {
           id: (j as any).id,
           type: 'chapter-operation',
           operation: op,
-          status: normalizeStatus((j as any).status),
+          status: normalizeStatus((j as any).status, (j as any).error_message),
           progress: Number((j as any).progress) || 0,
           errorMessage: (j as any).error_message ?? undefined,
           createdAt: (j as any).created_at,
@@ -109,7 +114,7 @@ export async function GET(_req: NextRequest) {
         jobs.push({
           id: (j as any).id,
           type: 'translate',
-          status: normalizeStatus((j as any).status),
+          status: normalizeStatus((j as any).status, (j as any).error_message),
           progress: Number((j as any).progress) || 0,
           errorMessage: (j as any).error_message ?? undefined,
           createdAt: (j as any).created_at,
@@ -145,7 +150,7 @@ export async function GET(_req: NextRequest) {
         jobs.push({
           id: (j as any).id,
           type: 'adjust',
-          status: normalizeStatus((j as any).status),
+          status: normalizeStatus((j as any).status, (j as any).error_message),
           progress: Number((j as any).progress_percentage) || 0,
           errorMessage: (j as any).error_message ?? undefined,
           createdAt: (j as any).created_at,
@@ -181,7 +186,7 @@ export async function GET(_req: NextRequest) {
         jobs.push({
           id: (j as any).id,
           type: 'adapt',
-          status: normalizeStatus((j as any).status),
+          status: normalizeStatus((j as any).status, (j as any).error_message),
           progress: Number((j as any).progress_percentage) || 0,
           errorMessage: (j as any).error_message ?? undefined,
           createdAt: (j as any).created_at,
@@ -217,7 +222,7 @@ export async function GET(_req: NextRequest) {
         jobs.push({
           id: (j as any).id,
           type: 'improve',
-          status: normalizeStatus((j as any).status),
+          status: normalizeStatus((j as any).status, (j as any).error_message),
           progress: Number((j as any).progress) || 0,
           errorMessage: (j as any).error_message ?? undefined,
           createdAt: (j as any).created_at,
@@ -249,7 +254,7 @@ export async function GET(_req: NextRequest) {
         jobs.push({
           id: (j as any).id,
           type: 'norms-update',
-          status: normalizeStatus((j as any).status),
+          status: normalizeStatus((j as any).status, (j as any).error_message),
           progress: Number((j as any).progress) || Number((j as any).progress_percentage) || 0,
           errorMessage: (j as any).error_message ?? undefined,
           createdAt: (j as any).created_at,

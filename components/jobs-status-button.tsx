@@ -4,16 +4,17 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   Activity, Loader2, CheckCircle2, XCircle, Languages, Sliders, Wand2,
-  Sparkles, SearchCheck, ExternalLink, FileText, ChevronRight, X
+  Sparkles, SearchCheck, ExternalLink, FileText, ChevronRight, X, Ban
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { classifyAIError } from '@/lib/ai-error-message';
+import { toast } from 'sonner';
 
 type ActiveJob = {
   id: string;
   type: 'translate' | 'adjust' | 'adapt' | 'improve' | 'norms-update' | 'chapter-operation';
   operation?: string;
-  status: 'pending' | 'running' | 'completed' | 'error';
+  status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
   progress: number;
   errorMessage?: string;
   createdAt: string;
@@ -27,6 +28,26 @@ type ActiveJob = {
   };
   resultHref: string;
 };
+
+export async function cancelJobRequest(jobId: string, type: ActiveJob['type']): Promise<boolean> {
+  try {
+    const res = await fetch('/api/jobs/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId, type }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      toast.error(err.error || 'Falha ao cancelar');
+      return false;
+    }
+    toast.success('Cancelamento solicitado. A operação para na próxima chamada à IA.');
+    return true;
+  } catch (e: any) {
+    toast.error(e.message || 'Falha ao cancelar');
+    return false;
+  }
+}
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -95,7 +116,7 @@ export function JobsStatusButton() {
   }, [open]);
 
   const running = jobs.filter((j) => j.status === 'running' || j.status === 'pending');
-  const recent  = jobs.filter((j) => j.status === 'completed' || j.status === 'error').slice(0, 10);
+  const recent  = jobs.filter((j) => j.status === 'completed' || j.status === 'error' || j.status === 'cancelled').slice(0, 10);
 
   return (
     <div className="relative" ref={wrapperRef}>
@@ -155,7 +176,7 @@ export function JobsStatusButton() {
                     <p className="px-4 pt-3 pb-1.5 text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
                       Em andamento ({running.length})
                     </p>
-                    {running.map((job) => <JobRow key={job.id} job={job} onClick={() => setOpen(false)} />)}
+                    {running.map((job) => <JobRow key={job.id} job={job} onClick={() => setOpen(false)} onAfterCancel={fetchJobs} />)}
                   </div>
                 )}
 
@@ -183,12 +204,21 @@ export function JobsStatusButton() {
   );
 }
 
-function JobRow({ job, onClick }: { job: ActiveJob; onClick: () => void }) {
+function JobRow({ job, onClick, onAfterCancel }: { job: ActiveJob; onClick: () => void; onAfterCancel?: () => void }) {
   const meta = metaFor(job);
   const isRunning = job.status === 'running' || job.status === 'pending';
   const isError = job.status === 'error';
   const isDone = job.status === 'completed';
+  const isCancelled = job.status === 'cancelled';
   const errInfo = isError && job.errorMessage ? classifyAIError(job.errorMessage) : null;
+
+  const handleCancel = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm('Cancelar esta operação? A IA para na próxima chamada — você economiza créditos a partir daí.')) return;
+    const ok = await cancelJobRequest(job.id, job.type);
+    if (ok) onAfterCancel?.();
+  };
 
   return (
     <Link
@@ -207,6 +237,7 @@ function JobRow({ job, onClick }: { job: ActiveJob; onClick: () => void }) {
             {isRunning && <Loader2 className="h-3 w-3 text-red-400 animate-spin flex-shrink-0" />}
             {isDone && <CheckCircle2 className="h-3 w-3 text-green-400 flex-shrink-0" />}
             {isError && <XCircle className="h-3 w-3 text-red-400 flex-shrink-0" />}
+            {isCancelled && <Ban className="h-3 w-3 text-gray-400 flex-shrink-0" />}
           </div>
 
           <p className="text-xs text-gray-500 truncate mt-0.5">
@@ -228,9 +259,25 @@ function JobRow({ job, onClick }: { job: ActiveJob; onClick: () => void }) {
               {errInfo.title}
             </p>
           )}
+
+          {isCancelled && (
+            <p className="text-[11px] text-gray-500 mt-1 italic">
+              Cancelado pelo usuário
+            </p>
+          )}
         </div>
 
-        <ChevronRight className="h-3.5 w-3.5 text-gray-700 flex-shrink-0 mt-1" />
+        {isRunning ? (
+          <button
+            onClick={handleCancel}
+            className="flex-shrink-0 mt-0.5 p-1 rounded-md text-gray-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+            title="Cancelar operação para parar de gastar créditos"
+          >
+            <Ban className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 text-gray-700 flex-shrink-0 mt-1" />
+        )}
       </div>
     </Link>
   );

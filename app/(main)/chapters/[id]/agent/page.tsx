@@ -11,13 +11,14 @@ import {
   ArrowLeft, Send, FileText, PanelLeftClose, PanelLeftOpen, Sparkles,
   Loader2, Trash2, Languages, Wand2, Sliders, SearchCheck, ArrowLeftRight,
   CheckCircle2, AlertCircle, Bot, User as UserIcon, Download, BookOpen,
-  ChevronDown, Cpu
+  ChevronDown, Cpu, Ban
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { VersionDiff } from '@/components/thesis/version-diff';
 import { AIErrorBanner } from '@/components/ai-error-banner';
 import { classifyAIError } from '@/lib/ai-error-message';
+import { cancelJobRequest } from '@/components/jobs-status-button';
 
 type ChapterVersion = {
   id: string;
@@ -333,6 +334,14 @@ export default function AgentModePage() {
         }
         if (job.status === 'failed' || job.status === 'error') {
           const errMsg = job.errorMessage || job.error || 'Falha desconhecida';
+          // Cancellation is encoded as error + special marker
+          if (errMsg.includes('__CANCELLED_BY_USER__')) {
+            updateMessage(asstId, {
+              status: 'success',
+              content: 'Operação cancelada. Nenhum crédito adicional foi gasto a partir da próxima chamada.',
+            });
+            return;
+          }
           const info = classifyAIError(errMsg);
           updateMessage(asstId, {
             status: 'error',
@@ -1080,7 +1089,7 @@ function MessageBubble({
         )}
 
         {message.status === 'running' && (
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <div className="flex items-center gap-2 text-xs text-gray-500">
               <Loader2 className="h-3 w-3 animate-spin" />
               Processando...
@@ -1088,6 +1097,19 @@ function MessageBubble({
             <p className="text-[11px] text-gray-600 leading-relaxed">
               Pode sair desta página — a operação continua no servidor. Veja o status em <strong className="text-gray-500">Operações</strong> no topo.
             </p>
+            {message.jobId && (
+              <button
+                onClick={async (e) => {
+                  e.preventDefault();
+                  if (!confirm('Cancelar esta operação? A IA para na próxima chamada — você economiza créditos a partir daí.')) return;
+                  await cancelJobRequest(message.jobId!, 'chapter-operation');
+                }}
+                className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-red-400 transition-colors"
+              >
+                <Ban className="h-3 w-3" />
+                Cancelar
+              </button>
+            )}
           </div>
         )}
 
