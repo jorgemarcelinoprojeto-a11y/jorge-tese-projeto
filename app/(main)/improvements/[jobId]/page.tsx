@@ -19,6 +19,7 @@ import {
 import Link from 'next/link';
 import { ImprovementSuggestion } from '@/lib/improvement/types';
 import { getAIErrorMessage } from '@/lib/ai-error-message';
+import { AIErrorBanner } from '@/components/ai-error-banner';
 
 type ImprovementJob = {
   jobId: string;
@@ -250,7 +251,7 @@ export default function ImprovementPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-muted-foreground">{getAIErrorMessage(job.error || 'Erro desconhecido')}</p>
+            <AIErrorBanner error={job.error || 'Erro desconhecido'} className="mb-3" />
             <Button className="mt-4" onClick={() => router.push(`/documents/${job.documentId}`)}>
               Voltar ao Documento
             </Button>

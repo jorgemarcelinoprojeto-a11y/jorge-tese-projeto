@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { SuggestionReviewPanel, Suggestion } from '@/components/suggestion-review-panel';
+import { AIErrorBanner } from '@/components/ai-error-banner';
 
 type AdjustJob = {
   id: string;
@@ -189,7 +190,7 @@ export default function ChapterAdjustPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-muted-foreground">{job.errorMessage || 'Erro desconhecido'}</p>
+            <AIErrorBanner error={job.errorMessage || 'Erro desconhecido'} className="mb-3" />
             <Button className="mt-4" onClick={() => router.push(`/chapters/${chapterId}`)}>
               Voltar ao Capítulo
             </Button>

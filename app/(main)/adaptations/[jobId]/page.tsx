@@ -10,6 +10,7 @@ import { Loader2, XCircle, ArrowLeft, Wand2 } from 'lucide-react';
 import Link from 'next/link';
 import { SuggestionReviewPanel, type Suggestion } from '@/components/suggestion-review-panel';
 import { getAIErrorMessage } from '@/lib/ai-error-message';
+import { AIErrorBanner } from '@/components/ai-error-banner';
 
 type AdaptJobApi = {
   jobId: string;
@@ -246,7 +247,7 @@ export default function DocumentAdaptationPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-muted-foreground">{getAIErrorMessage(job.error || 'Erro desconhecido')}</p>
+            <AIErrorBanner error={job.error || 'Erro desconhecido'} className="mb-3" />
             <Button className="mt-4" onClick={() => router.push(backHref)}>
               {backLabel}
             </Button>

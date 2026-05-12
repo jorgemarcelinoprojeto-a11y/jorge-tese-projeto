@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { SuggestionReviewPanel, Suggestion } from '@/components/suggestion-review-panel';
+import { AIErrorBanner } from '@/components/ai-error-banner';
 
 type UpdateJob = {
   id: string;
@@ -228,7 +229,7 @@ export default function ChapterUpdatePage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-muted-foreground">{job.error || 'Erro desconhecido'}</p>
+            <AIErrorBanner error={job.error || 'Erro desconhecido'} className="mb-3" />
             <Button className="mt-4" onClick={() => router.push(`/chapters/${chapterId}`)}>
               Voltar ao Capítulo
             </Button>
