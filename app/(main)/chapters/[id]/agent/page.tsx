@@ -15,6 +15,8 @@ import {
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { VersionDiff } from '@/components/thesis/version-diff';
+import { AIErrorBanner } from '@/components/ai-error-banner';
+import { classifyAIError } from '@/lib/ai-error-message';
 
 type ChapterVersion = {
   id: string;
@@ -253,10 +255,20 @@ export default function AgentModePage() {
           return;
         }
         if (job.status === 'failed' || job.status === 'error') {
+          const errMsg = job.errorMessage || job.error || 'Falha desconhecida';
+          const info = classifyAIError(errMsg);
           updateMessage(asstId, {
             status: 'error',
-            content: `Erro: ${job.errorMessage || job.error || 'Falha desconhecida'}`,
+            content: errMsg,
           });
+          // Toast for quota errors so user notices immediately
+          if (info.kind === 'quota') {
+            toast.error(info.title, { description: info.message, duration: 10000 });
+          } else if (info.kind === 'rate-limit') {
+            toast.warning(info.title, { description: info.message, duration: 6000 });
+          } else if (info.kind === 'auth') {
+            toast.error(info.title, { description: info.message, duration: 10000 });
+          }
           return;
         }
         // still running — update progress
@@ -795,13 +807,21 @@ function MessageBubble({
   }
 
   // assistant
+  const isErrorMsg = message.status === 'error';
+  const errorInfo = isErrorMsg ? classifyAIError(message.content) : null;
+  const isAIError = errorInfo && errorInfo.kind !== 'unknown';
+
   return (
     <div className="flex items-start gap-3">
       <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-red-500/30 to-red-700/20 border border-red-500/30 flex items-center justify-center">
         <Bot className="h-3.5 w-3.5 text-red-400" />
       </div>
       <div className="max-w-[80%] bg-white/[0.04] border border-white/10 rounded-2xl rounded-tl-sm px-4 py-2.5 space-y-2">
-        <p className="text-sm text-gray-200 whitespace-pre-wrap">{message.content}</p>
+        {isAIError ? (
+          <AIErrorBanner error={message.content} variant="full" />
+        ) : (
+          <p className="text-sm text-gray-200 whitespace-pre-wrap">{message.content}</p>
+        )}
 
         {message.status === 'running' && (
           <div className="flex items-center gap-2 text-xs text-gray-500">

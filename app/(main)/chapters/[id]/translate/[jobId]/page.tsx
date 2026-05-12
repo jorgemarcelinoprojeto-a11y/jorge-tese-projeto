@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { SuggestionReviewPanel, Suggestion } from '@/components/suggestion-review-panel';
+import { AIErrorBanner } from '@/components/ai-error-banner';
 
 type TranslateJob = {
   id: string;
@@ -220,20 +221,16 @@ export default function ChapterTranslatePage() {
           </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-red-600">
-              <XCircle className="h-5 w-5" />
-              Erro ao Traduzir Capítulo
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-muted-foreground">{job.error || 'Erro desconhecido'}</p>
-            <Button className="mt-4" onClick={() => router.push(`/chapters/${chapterId}`)}>
-              Voltar ao Capítulo
-            </Button>
-          </CardContent>
-        </Card>
+        <AIErrorBanner error={job.error || 'Erro desconhecido'} />
+
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => router.push(`/chapters/${chapterId}`)}>
+            Voltar ao Capítulo
+          </Button>
+          <Button onClick={() => router.push(`/chapters/${chapterId}/agent`)}>
+            Tentar no Modo Agente
+          </Button>
+        </div>
       </div>
     );
   }

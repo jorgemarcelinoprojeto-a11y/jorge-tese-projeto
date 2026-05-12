@@ -22,6 +22,7 @@ import Link from 'next/link';
 import { ImprovementSuggestion } from '@/lib/improvement/types';
 import { OperationContextDisplay } from '@/components/thesis/operation-context-display';
 import type { OperationContextSummary } from '@/lib/thesis/types';
+import { AIErrorBanner } from '@/components/ai-error-banner';
 
 type ImprovementJob = {
   id: string;
@@ -194,7 +195,7 @@ export default function ChapterImprovementPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-muted-foreground">{job.error || 'Erro desconhecido'}</p>
+            <AIErrorBanner error={job.error || 'Erro desconhecido'} className="mb-3" />
             <Button className="mt-4" onClick={() => router.push(`/chapters/${chapterId}`)}>
               Voltar ao Capítulo
             </Button>

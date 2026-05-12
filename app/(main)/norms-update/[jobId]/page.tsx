@@ -22,6 +22,7 @@ import {
 import Link from 'next/link';
 import { NormReference } from '@/lib/norms-update/types';
 import { getAIErrorMessage } from '@/lib/ai-error-message';
+import { AIErrorBanner } from '@/components/ai-error-banner';
 
 type ActivityLogEntry = {
   at: string;
@@ -329,7 +330,7 @@ export default function NormUpdatePage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-muted-foreground">{getAIErrorMessage(job.error || 'Erro desconhecido')}</p>
+            <AIErrorBanner error={job.error || 'Erro desconhecido'} className="mb-3" />
             <ActivityLogPanel entries={job.activityLog ?? []} />
             <Button className="mt-4" onClick={() => router.push(backHref)}>
               {backLabel}
