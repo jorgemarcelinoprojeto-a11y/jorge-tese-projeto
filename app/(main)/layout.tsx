@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { UserMenu } from "@/components/user-menu";
+import { JobsStatusButton } from "@/components/jobs-status-button";
 import { usePathname } from "next/navigation";
 import { FileText, Settings } from "lucide-react";
 
@@ -124,7 +125,7 @@ export default function MainLayout({
                 </div>
               </Link>
 
-              
+              <JobsStatusButton />
 
               <div className="ml-2 pl-2 border-l border-white/10">
                 <UserMenu />
