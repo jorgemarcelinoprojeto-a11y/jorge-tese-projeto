@@ -1,10 +1,13 @@
 'use client';
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { GitBranch, Circle, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { GitBranch, CheckCircle2, Circle, ArrowLeftRight, Eye, Clock } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { VersionDiff } from './version-diff';
+import { cn } from '@/lib/utils';
 
 type ChapterVersion = {
   id: string;
@@ -22,155 +25,24 @@ type VersionHistoryProps = {
   showHeader?: boolean;
 };
 
+const OPERATION_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+  upload:   { label: 'Original',  color: 'text-blue-400',   bg: 'bg-blue-500/15 border-blue-500/30' },
+  improve:  { label: 'Melhorado', color: 'text-green-400',  bg: 'bg-green-500/15 border-green-500/30' },
+  translate:{ label: 'Traduzido', color: 'text-purple-400', bg: 'bg-purple-500/15 border-purple-500/30' },
+  adjust:   { label: 'Ajustado',  color: 'text-orange-400', bg: 'bg-orange-500/15 border-orange-500/30' },
+  adapt:    { label: 'Adaptado',  color: 'text-pink-400',   bg: 'bg-pink-500/15 border-pink-500/30' },
+  update:   { label: 'Atualizado',color: 'text-yellow-400', bg: 'bg-yellow-500/15 border-yellow-500/30' },
+};
+
+function getOpConfig(operation: string) {
+  return OPERATION_CONFIG[operation] ?? { label: operation, color: 'text-gray-400', bg: 'bg-gray-500/15 border-gray-500/30' };
+}
+
 export function VersionHistory({ versions, chapterId, showHeader = true }: VersionHistoryProps) {
   const router = useRouter();
-
-  // Organiza versões em árvore
-  const buildTree = () => {
-    const versionMap = new Map(versions.map(v => [v.id, v]));
-    const roots: ChapterVersion[] = [];
-    const children = new Map<string, ChapterVersion[]>();
-
-    versions.forEach(version => {
-      if (!version.parentVersionId) {
-        roots.push(version);
-      } else {
-        const siblings = children.get(version.parentVersionId) || [];
-        siblings.push(version);
-        children.set(version.parentVersionId, siblings);
-      }
-    });
-
-    return { roots, children, versionMap };
-  };
-
-  const { roots, children } = buildTree();
-
-  const getOperationColor = (operation: string) => {
-    switch (operation) {
-      case 'upload': return 'bg-blue-500';
-      case 'improve': return 'bg-green-500';
-      case 'translate': return 'bg-purple-500';
-      case 'adjust': return 'bg-orange-500';
-      case 'adapt': return 'bg-pink-500';
-      case 'update': return 'bg-yellow-500';
-      default: return 'bg-gray-500';
-    }
-  };
-
-  const getOperationLabel = (operation: string) => {
-    switch (operation) {
-      case 'upload': return 'Original';
-      case 'improve': return 'Melhorado';
-      case 'translate': return 'Traduzido';
-      case 'adjust': return 'Ajustado';
-      case 'adapt': return 'Adaptado';
-      case 'update': return 'Atualizado';
-      default: return operation;
-    }
-  };
-
-  const renderVersion = (version: ChapterVersion, level: number = 0, isLast: boolean = false) => {
-    const versionChildren = children.get(version.id) || [];
-    const hasChildren = versionChildren.length > 0;
-
-    return (
-      <div key={version.id} className="relative">
-        {/* Version Node */}
-        <div
-          className={`flex items-center gap-3 p-3 rounded-lg border transition-colors cursor-pointer ${
-            version.isCurrent
-              ? 'bg-red-500/10 border-red-500/30 hover:bg-red-500/20'
-              : 'bg-muted/30 border-border/50 hover:bg-muted/50'
-          }`}
-          style={{ marginLeft: `${level * 40}px` }}
-          onClick={() => router.push(`/chapters/${chapterId}/versions/${version.id}`)}
-        >
-          {/* Connector Line */}
-          {level > 0 && (
-            <div
-              className="absolute h-[2px] bg-border/50"
-              style={{
-                left: `${(level - 1) * 40 + 20}px`,
-                width: '40px',
-                top: '50%'
-              }}
-            />
-          )}
-
-          {/* Node Icon */}
-          <div className="relative z-10">
-            {version.isCurrent ? (
-              <CheckCircle2 className="h-5 w-5 text-red-500" />
-            ) : (
-              <Circle className="h-5 w-5 text-muted-foreground" />
-            )}
-          </div>
-
-          {/* Version Info */}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-sm font-medium">v{version.versionNumber}</span>
-              {version.isCurrent && (
-                <Badge variant="default" className="text-xs bg-red-600">
-                  Atual
-                </Badge>
-              )}
-              <Badge
-                variant="outline"
-                className={`text-xs ${getOperationColor(version.createdByOperation)} text-white border-0`}
-              >
-                {getOperationLabel(version.createdByOperation)}
-              </Badge>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>
-                {new Date(version.createdAt).toLocaleDateString('pt-BR', {
-                  day: '2-digit',
-                  month: 'short',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}
-              </span>
-              {version.pages && (
-                <>
-                  <span>•</span>
-                  <span>{version.pages} {version.pages === 1 ? 'pág' : 'págs'}</span>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Arrow indicating children */}
-          {hasChildren && (
-            <ArrowRight className="h-4 w-4 text-muted-foreground" />
-          )}
-        </div>
-
-        {/* Vertical Line to Children */}
-        {hasChildren && (
-          <div
-            className="absolute bg-border/50"
-            style={{
-              left: `${level * 40 + 10}px`,
-              top: '50%',
-              width: '2px',
-              height: `${versionChildren.length * 70}px`
-            }}
-          />
-        )}
-
-        {/* Render Children */}
-        {hasChildren && (
-          <div className="mt-2 space-y-2">
-            {versionChildren.map((child, idx) =>
-              renderVersion(child, level + 1, idx === versionChildren.length - 1)
-            )}
-          </div>
-        )}
-      </div>
-    );
-  };
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [diffLeft, setDiffLeft] = useState<ChapterVersion | null>(null);
+  const [diffRight, setDiffRight] = useState<ChapterVersion | null>(null);
 
   if (versions.length === 0) {
     return (
@@ -184,50 +56,188 @@ export function VersionHistory({ versions, chapterId, showHeader = true }: Versi
           </CardHeader>
         )}
         <CardContent className="flex flex-col items-center justify-center py-12">
-          <GitBranch className="h-12 w-12 text-muted-foreground mb-4 opacity-50" />
-          <p className="text-sm text-muted-foreground">Nenhuma versão encontrada</p>
+          <GitBranch className="h-12 w-12 text-gray-600 mb-4" />
+          <p className="text-sm text-gray-500">Nenhuma versão encontrada</p>
         </CardContent>
       </Card>
     );
   }
 
-  return (
-    <Card className="bg-gradient-to-br from-white/[0.07] to-white/[0.02] backdrop-blur-xl border-white/10">
-      {showHeader && (
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <GitBranch className="h-5 w-5" />
-            Árvore de Versões
-          </CardTitle>
-          <CardDescription>
-            Visualização hierárquica das {versions.length} versões
-          </CardDescription>
-        </CardHeader>
-      )}
-      <CardContent>
-        <div className="space-y-2">
-          {roots.map((root, idx) => renderVersion(root, 0, idx === roots.length - 1))}
-        </div>
+  // Sort versions chronologically
+  const sorted = [...versions].sort((a, b) => a.versionNumber - b.versionNumber);
+  const originalVersion = sorted[0];
+  const currentVersion = sorted.find((v) => v.isCurrent) ?? sorted[sorted.length - 1];
 
-        {/* Legend */}
-        <div className="mt-6 pt-4 border-t">
-          <p className="text-xs text-muted-foreground mb-2">Legenda:</p>
-          <div className="flex flex-wrap gap-2">
-            <div className="flex items-center gap-1 text-xs">
-              <CheckCircle2 className="h-3 w-3 text-red-500" />
-              <span className="text-muted-foreground">Versão Atual</span>
+  const openDiff = (left: ChapterVersion, right: ChapterVersion) => {
+    setDiffLeft(left);
+    setDiffRight(right);
+    setDiffOpen(true);
+  };
+
+  return (
+    <>
+      <Card className="bg-gradient-to-br from-white/[0.07] to-white/[0.02] backdrop-blur-xl border-white/10">
+        {showHeader && (
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <GitBranch className="h-5 w-5 text-red-400" />
+                Histórico de Versões
+                <Badge variant="secondary" className="bg-white/10 text-gray-400 text-xs ml-1">
+                  {versions.length}
+                </Badge>
+              </CardTitle>
+              {versions.length >= 2 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-white/15 text-gray-300 hover:bg-white/10 gap-2 text-xs h-8"
+                  onClick={() => openDiff(originalVersion, currentVersion)}
+                >
+                  <ArrowLeftRight className="h-3.5 w-3.5" />
+                  Original vs Atual
+                </Button>
+              )}
             </div>
-            <div className="flex items-center gap-1 text-xs">
-              <Circle className="h-3 w-3 text-muted-foreground" />
-              <span className="text-muted-foreground">Versão Anterior</span>
-            </div>
-            <div className="flex items-center gap-1 text-xs">
-              <ArrowRight className="h-3 w-3 text-muted-foreground" />
-              <span className="text-muted-foreground">Tem Derivações</span>
+          </CardHeader>
+        )}
+
+        <CardContent className="pt-0">
+          {/* Timeline */}
+          <div className="relative">
+            {/* Vertical line */}
+            {sorted.length > 1 && (
+              <div className="absolute left-[19px] top-5 bottom-5 w-px bg-white/10" />
+            )}
+
+            <div className="space-y-1">
+              {sorted.map((version, idx) => {
+                const cfg = getOpConfig(version.createdByOperation);
+                const isFirst = idx === 0;
+                const isLast = idx === sorted.length - 1;
+                const prevVersion = idx > 0 ? sorted[idx - 1] : null;
+
+                return (
+                  <div key={version.id} className="relative flex items-start gap-4 py-2.5">
+                    {/* Node */}
+                    <div className="relative z-10 flex-shrink-0 mt-0.5">
+                      {version.isCurrent ? (
+                        <CheckCircle2 className="h-[22px] w-[22px] text-red-500" />
+                      ) : (
+                        <Circle className="h-[22px] w-[22px] text-gray-600" />
+                      )}
+                    </div>
+
+                    {/* Content */}
+                    <div
+                      className={cn(
+                        'flex-1 flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border transition-all cursor-pointer group',
+                        version.isCurrent
+                          ? 'bg-red-500/[0.08] border-red-500/25 hover:border-red-500/40'
+                          : 'bg-white/[0.03] border-white/8 hover:bg-white/[0.06] hover:border-white/15'
+                      )}
+                      onClick={() => router.push(`/chapters/${chapterId}/versions/${version.id}`)}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-semibold text-white">
+                              v{version.versionNumber}
+                            </span>
+                            {version.isCurrent && (
+                              <Badge className="bg-red-600 text-white text-xs px-1.5 py-0 h-4">
+                                Atual
+                              </Badge>
+                            )}
+                            {isFirst && !version.isCurrent && (
+                              <Badge variant="outline" className="text-gray-500 border-gray-700 text-xs px-1.5 py-0 h-4">
+                                Original
+                              </Badge>
+                            )}
+                            <Badge className={cn('text-xs border px-1.5 py-0 h-4', cfg.bg, cfg.color)}>
+                              {cfg.label}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-gray-500">
+                            <Clock className="h-3 w-3" />
+                            {new Date(version.createdAt).toLocaleDateString('pt-BR', {
+                              day: '2-digit',
+                              month: 'short',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                            {version.pages && (
+                              <>
+                                <span>·</span>
+                                <span>{version.pages} {version.pages === 1 ? 'pág' : 'págs'}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div
+                        className="flex items-center gap-1 flex-shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {prevVersion && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-xs text-gray-400 hover:text-white hover:bg-white/10 gap-1"
+                            onClick={() => openDiff(prevVersion, version)}
+                            title="Comparar com versão anterior"
+                          >
+                            <ArrowLeftRight className="h-3 w-3" />
+                            Diff
+                          </Button>
+                        )}
+                        {!isFirst && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-xs text-gray-400 hover:text-white hover:bg-white/10 gap-1"
+                            onClick={() => openDiff(originalVersion, version)}
+                            title="Comparar com original"
+                          >
+                            <Eye className="h-3 w-3" />
+                            vs Original
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2 text-xs text-gray-400 hover:text-white hover:bg-white/10"
+                          onClick={() => router.push(`/chapters/${chapterId}/versions/${version.id}`)}
+                        >
+                          Abrir
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+
+      {/* Diff Dialog */}
+      {diffLeft && diffRight && (
+        <VersionDiff
+          open={diffOpen}
+          onOpenChange={setDiffOpen}
+          chapterId={chapterId}
+          leftVersionId={diffLeft.id}
+          leftVersionNumber={diffLeft.versionNumber}
+          leftLabel={diffLeft.createdByOperation === 'upload' ? 'Original' : getOpConfig(diffLeft.createdByOperation).label}
+          rightVersionId={diffRight.id}
+          rightVersionNumber={diffRight.versionNumber}
+          rightLabel={diffRight.isCurrent ? 'Atual' : getOpConfig(diffRight.createdByOperation).label}
+        />
+      )}
+    </>
   );
 }
