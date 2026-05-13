@@ -71,37 +71,37 @@ export default function ChapterPage() {
         throw new Error('Falha ao carregar capítulo');
       }
       const chapterData = await chapterRes.json();
-      setChapter(chapterData.chapter);
 
-      // Load versions
-      const versionsRes = await fetch(`/api/chapters/${chapterId}/versions`);
+      // Load versions and thesis in parallel
+      const [versionsRes, thesisRes] = await Promise.all([
+        fetch(`/api/chapters/${chapterId}/versions`),
+        chapterData.chapter.thesisId
+          ? fetch(`/api/theses/${chapterData.chapter.thesisId}`)
+          : Promise.resolve(null)
+      ]);
+
       if (versionsRes.ok) {
         const versionsData = await versionsRes.json();
         setVersions(versionsData.versions || []);
       }
 
-      // Load all chapters from thesis for chat context
-      if (chapterData.chapter.thesisId) {
-        const thesisRes = await fetch(`/api/theses/${chapterData.chapter.thesisId}`);
-        if (thesisRes.ok) {
-          const thesisData = await thesisRes.json();
-          const chaptersWithVersions = await Promise.all(
-            (thesisData.chapters || []).map(async (ch: any) => {
-              const vRes = await fetch(`/api/chapters/${ch.id}/versions`);
-              if (vRes.ok) {
-                const vData = await vRes.json();
-                return {
-                  id: ch.id,
-                  title: ch.title,
-                  chapterOrder: ch.chapterOrder,
-                  versions: vData.versions || []
-                };
-              }
-              return null;
-            })
-          );
-          setAllChapters(chaptersWithVersions.filter(Boolean));
-        }
+      if (thesisRes && thesisRes.ok) {
+        const thesisData = await thesisRes.json();
+        setChapter({ ...chapterData.chapter, thesisTitle: thesisData.thesis?.title });
+
+        const chaptersWithVersions = await Promise.all(
+          (thesisData.chapters || []).map(async (ch: any) => {
+            const vRes = await fetch(`/api/chapters/${ch.id}/versions`);
+            if (vRes.ok) {
+              const vData = await vRes.json();
+              return { id: ch.id, title: ch.title, chapterOrder: ch.chapterOrder, versions: vData.versions || [] };
+            }
+            return null;
+          })
+        );
+        setAllChapters(chaptersWithVersions.filter(Boolean));
+      } else {
+        setChapter(chapterData.chapter);
       }
 
       console.log('[CHAPTER-PAGE] Loaded chapter:', chapterData.chapter.title);

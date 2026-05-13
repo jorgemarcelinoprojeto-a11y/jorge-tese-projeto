@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { UploadDialog } from '@/components/upload-dialog';
 import { FileText, Upload, ArrowLeft, Trash2 } from 'lucide-react';
-import Link from 'next/link';
 import { toast } from 'sonner';
 
 type Project = {
@@ -158,20 +157,18 @@ export default function ProjectPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {documents.map((doc) => (
-            <Link key={doc.id} href={`/documents/${doc.id}`}>
-              <Card className="hover:shadow-lg transition-shadow cursor-pointer h-full">
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <FileText className="h-8 w-8 text-primary" />
-                    <Badge variant="secondary">{doc.pages} páginas</Badge>
-                  </div>
-                  <CardTitle className="line-clamp-2">{doc.title}</CardTitle>
-                  <CardDescription>
-                    {doc.chunksCount} chunks processados
-                  </CardDescription>
-                </CardHeader>
-              </Card>
-            </Link>
+            <Card key={doc.id} className="h-full">
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <FileText className="h-8 w-8 text-primary" />
+                  <Badge variant="secondary">{doc.pages} páginas</Badge>
+                </div>
+                <CardTitle className="line-clamp-2">{doc.title}</CardTitle>
+                <CardDescription>
+                  {doc.chunksCount} chunks processados
+                </CardDescription>
+              </CardHeader>
+            </Card>
           ))}
         </div>
       )}

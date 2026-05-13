@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,7 @@ export function UploadChapterDialog({
   onUploadComplete,
   suggestedOrder,
 }: UploadChapterDialogProps) {
+  const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState('');
   const [chapterOrder, setChapterOrder] = useState(suggestedOrder?.toString() || '');
@@ -85,9 +87,12 @@ export function UploadChapterDialog({
       setChapterOrder('');
       onOpenChange(false);
 
-      // Notify parent
-      if (onUploadComplete) {
-        onUploadComplete();
+      // Notify parent then navigate to the agent view
+      if (onUploadComplete) onUploadComplete();
+
+      const chapterId = data.chapter?.id;
+      if (chapterId) {
+        router.push(`/chapters/${chapterId}`);
       }
     } catch (error: any) {
       console.error('[UPLOAD-CHAPTER] Error:', error);

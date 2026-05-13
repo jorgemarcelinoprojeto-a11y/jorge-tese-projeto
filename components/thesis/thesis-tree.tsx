@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
-import { ChevronDown, ChevronRight, FileText, File, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileText, Trash2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import { useState } from 'react';
 
 type ChapterVersion = {
   id: string;
@@ -29,45 +29,36 @@ type Chapter = {
 type ThesisTreeProps = {
   chapters: Chapter[];
   onDeleteChapter?: (chapterId: string) => void;
-  onChapterClick?: (chapterId: string) => void;
 };
 
-export function ThesisTree({ chapters, onDeleteChapter, onChapterClick }: ThesisTreeProps) {
-  const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set());
+const OPERATION_COLORS: Record<string, string> = {
+  upload: 'bg-blue-500',
+  improve: 'bg-green-500',
+  translate: 'bg-purple-500',
+  adjust: 'bg-orange-500',
+  adapt: 'bg-pink-500',
+  update: 'bg-yellow-500',
+};
 
-  const toggleChapter = (chapterId: string) => {
-    const newExpanded = new Set(expandedChapters);
-    if (newExpanded.has(chapterId)) {
-      newExpanded.delete(chapterId);
-    } else {
-      newExpanded.add(chapterId);
-    }
-    setExpandedChapters(newExpanded);
-  };
+const OPERATION_LABELS: Record<string, string> = {
+  upload: 'Original',
+  improve: 'Melhorado',
+  translate: 'Traduzido',
+  adjust: 'Ajustado',
+  adapt: 'Adaptado',
+  update: 'Atualizado',
+};
 
-  const getOperationColor = (operation: string) => {
-    switch (operation) {
-      case 'upload': return 'bg-blue-500';
-      case 'improve': return 'bg-green-500';
-      case 'translate': return 'bg-purple-500';
-      case 'adjust': return 'bg-orange-500';
-      case 'adapt': return 'bg-pink-500';
-      case 'update': return 'bg-yellow-500';
-      default: return 'bg-gray-500';
-    }
-  };
+export function ThesisTree({ chapters, onDeleteChapter }: ThesisTreeProps) {
+  const router = useRouter();
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const getOperationLabel = (operation: string) => {
-    switch (operation) {
-      case 'upload': return 'Original';
-      case 'improve': return 'Melhorado';
-      case 'translate': return 'Traduzido';
-      case 'adjust': return 'Ajustado';
-      case 'adapt': return 'Adaptado';
-      case 'update': return 'Atualizado';
-      default: return operation;
-    }
-  };
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   if (chapters.length === 0) {
     return (
@@ -79,84 +70,77 @@ export function ThesisTree({ chapters, onDeleteChapter, onChapterClick }: Thesis
     );
   }
 
-  // Sort chapters by order
-  const sortedChapters = [...chapters].sort((a, b) => a.chapterOrder - b.chapterOrder);
+  const sorted = [...chapters].sort((a, b) => a.chapterOrder - b.chapterOrder);
 
   return (
     <div className="space-y-2">
-      {sortedChapters.map((chapter) => {
-        const isExpanded = expandedChapters.has(chapter.id);
+      {sorted.map((chapter) => {
+        const isExpanded = expanded.has(chapter.id);
         const hasVersions = (chapter.totalVersions || 0) > 0;
 
         return (
-          <div key={chapter.id} className="border rounded-lg overflow-hidden">
-            {/* Chapter Header */}
-            <div className="flex items-center gap-2 p-3 bg-muted/50 hover:bg-muted/70 transition-colors">
-              {/* Expand/Collapse Button */}
+          <div key={chapter.id} className="border border-white/10 rounded-lg overflow-hidden">
+            {/* Chapter header */}
+            <div className="flex items-center gap-2 p-3 bg-white/[0.04] hover:bg-white/[0.07] transition-colors">
               <button
-                onClick={() => toggleChapter(chapter.id)}
-                className="p-1 hover:bg-background rounded"
+                onClick={() => toggle(chapter.id)}
+                className="p-1 hover:bg-white/10 rounded"
                 disabled={!hasVersions}
               >
                 {hasVersions ? (
-                  isExpanded ? (
-                    <ChevronDown className="h-4 w-4" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4" />
-                  )
+                  isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />
                 ) : (
                   <div className="w-4 h-4" />
                 )}
               </button>
 
-              {/* Chapter Icon */}
-              <FileText className="h-5 w-5 text-primary" />
+              <FileText className="h-5 w-5 text-red-500 shrink-0" />
 
-              {/* Chapter Info */}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm">
-                    Capítulo {chapter.chapterOrder}
+              <div
+                className="flex-1 min-w-0 cursor-pointer"
+                onClick={() => router.push(`/chapters/${chapter.id}`)}
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium text-sm text-white">
+                    Cap. {chapter.chapterOrder}
                   </span>
-                  <span className="text-sm text-muted-foreground truncate">
-                    {chapter.title}
-                  </span>
+                  <span className="text-sm text-gray-300 truncate">{chapter.title}</span>
                 </div>
                 {chapter.currentVersion && (
-                  <div className="flex items-center gap-2 mt-1">
-                    <Badge variant="outline" className="text-xs">
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <Badge variant="outline" className="text-xs border-white/20 text-gray-400">
                       v{chapter.currentVersion.versionNumber}
                     </Badge>
                     {chapter.currentVersion.pages && (
-                      <span className="text-xs text-muted-foreground">
-                        {chapter.currentVersion.pages} páginas
+                      <span className="text-xs text-gray-500">
+                        {chapter.currentVersion.pages} págs
                       </span>
                     )}
                     <Badge
-                      variant="secondary"
                       className={cn(
-                        'text-xs text-white',
-                        getOperationColor(chapter.currentVersion.createdByOperation)
+                        'text-xs text-white border-0',
+                        OPERATION_COLORS[chapter.currentVersion.createdByOperation] || 'bg-gray-500'
                       )}
                     >
-                      {getOperationLabel(chapter.currentVersion.createdByOperation)}
+                      {OPERATION_LABELS[chapter.currentVersion.createdByOperation] || chapter.currentVersion.createdByOperation}
                     </Badge>
                   </div>
                 )}
               </div>
 
-              {/* Version Count */}
-              <Badge variant="secondary" className="ml-auto">
+              <Badge variant="secondary" className="ml-auto shrink-0 bg-white/10 text-gray-300 border-white/10">
                 {chapter.totalVersions} {chapter.totalVersions === 1 ? 'versão' : 'versões'}
               </Badge>
 
-              {/* Actions */}
-              <div className="flex gap-1">
-                <Link href={`/chapters/${chapter.id}`}>
-                  <Button size="sm" variant="ghost" className="h-8">
-                    Abrir
-                  </Button>
-                </Link>
+              <div className="flex gap-1 shrink-0">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-red-400 hover:text-white hover:bg-red-600/20"
+                  onClick={() => router.push(`/chapters/${chapter.id}`)}
+                >
+                  Abrir
+                </Button>
                 {onDeleteChapter && (
                   <Button
                     size="sm"
@@ -173,52 +157,40 @@ export function ThesisTree({ chapters, onDeleteChapter, onChapterClick }: Thesis
               </div>
             </div>
 
-            {/* Versions List (when expanded) */}
+            {/* Versions list — clicking opens the chapter (agent) page */}
             {isExpanded && chapter.versions && chapter.versions.length > 0 && (
-              <div className="border-t bg-background">
+              <div className="border-t border-white/10 bg-black/20">
                 {chapter.versions.map((version) => (
                   <div
                     key={version.id}
                     className={cn(
-                      'flex items-center gap-2 p-3 pl-12 hover:bg-muted/50 transition-colors',
-                      version.isCurrent && 'bg-primary/5'
+                      'flex items-center gap-2 p-3 pl-12 hover:bg-white/5 transition-colors cursor-pointer',
+                      version.isCurrent && 'bg-red-500/5'
                     )}
+                    onClick={() => router.push(`/chapters/${chapter.id}`)}
                   >
-                    <File className="h-4 w-4 text-muted-foreground" />
-
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">
-                          Versão {version.versionNumber}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-white">
+                          v{version.versionNumber}
                         </span>
                         {version.isCurrent && (
-                          <Badge variant="default" className="text-xs">
-                            Atual
-                          </Badge>
+                          <Badge variant="default" className="text-xs bg-red-600">Atual</Badge>
                         )}
                         <Badge
-                          variant="outline"
                           className={cn(
-                            'text-xs',
-                            getOperationColor(version.createdByOperation),
-                            'text-white border-0'
+                            'text-xs text-white border-0',
+                            OPERATION_COLORS[version.createdByOperation] || 'bg-gray-500'
                           )}
                         >
-                          {getOperationLabel(version.createdByOperation)}
+                          {OPERATION_LABELS[version.createdByOperation] || version.createdByOperation}
                         </Badge>
                       </div>
-                      <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                        {version.pages && <span>{version.pages} páginas</span>}
-                        {version.chunksCount && <span>{version.chunksCount} chunks</span>}
+                      <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                        {version.pages && <span>{version.pages} págs</span>}
                         <span>{new Date(version.createdAt).toLocaleDateString('pt-BR')}</span>
                       </div>
                     </div>
-
-                    <Link href={`/chapters/${chapter.id}/versions/${version.id}`}>
-                      <Button size="sm" variant="ghost" className="h-7 text-xs">
-                        Ver
-                      </Button>
-                    </Link>
                   </div>
                 ))}
               </div>

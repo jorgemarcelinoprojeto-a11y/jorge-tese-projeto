@@ -1,11 +1,15 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { MessageSquare, Send, Loader2 } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import { MessageSquare, Send, Loader2, Zap, GitCompare } from 'lucide-react';
 import { toast } from 'sonner';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -45,6 +49,15 @@ type ChapterChatProps = {
 };
 
 export function ChapterChat({ currentChapterId, allChapters }: ChapterChatProps) {
+  const router = useRouter();
+
+  // /funcao dialog state
+  const [funcaoDialogOpen, setFuncaoDialogOpen] = useState(false);
+  const [funcaoMode, setFuncaoMode] = useState<'preset' | 'custom'>('preset');
+  const [funcaoInstructions, setFuncaoInstructions] = useState('');
+  const [funcaoRunning, setFuncaoRunning] = useState(false);
+  const [funcaoOps, setFuncaoOps] = useState({ adjust: true, update: true, translate: true });
+
   // Load messages from localStorage on mount
   const loadMessagesFromStorage = (): Message[] => {
     if (typeof window === 'undefined') return [];
@@ -146,8 +159,91 @@ export function ChapterChat({ currentChapterId, allChapters }: ChapterChatProps)
     }
   }, [currentChapterId, allChapters]);
 
+  const handleRunFuncao = async () => {
+    const currentChapter = allChapters.find(c => c.id === currentChapterId);
+    const currentVersion = currentChapter?.versions.find(v => v.isCurrent);
+    if (!currentVersion) {
+      toast.error('Nenhuma versão atual encontrada');
+      return;
+    }
+
+    const versionId = currentVersion.id;
+    const provider = selectedProvider;
+    const model = selectedModels[provider];
+    const instructions = funcaoMode === 'preset'
+      ? 'Ajuste o texto para melhorar a clareza, coesão e linguagem acadêmica, corrigindo erros gramaticais e de estilo.'
+      : funcaoInstructions.trim();
+
+    if (funcaoMode === 'custom' && !instructions) {
+      toast.error('Insira as instruções personalizadas');
+      return;
+    }
+
+    setFuncaoRunning(true);
+    try {
+      const promises: Promise<any>[] = [];
+
+      if (funcaoOps.adjust) {
+        promises.push(
+          fetch(`/api/chapters/${currentChapterId}/adjust`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ versionId, instructions, provider, model })
+          })
+        );
+      }
+
+      if (funcaoOps.update) {
+        promises.push(
+          fetch(`/api/chapters/${currentChapterId}/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ versionId, provider, model })
+          })
+        );
+      }
+
+      if (funcaoOps.translate) {
+        promises.push(
+          fetch(`/api/chapters/${currentChapterId}/translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ versionId, targetLanguage: 'pt', provider, model })
+          })
+        );
+      }
+
+      await Promise.all(promises);
+      toast.success('Operações iniciadas!', {
+        description: 'As operações estão sendo processadas em segundo plano.',
+        duration: 5000
+      });
+      setFuncaoDialogOpen(false);
+    } catch (error: any) {
+      toast.error('Erro ao iniciar operações');
+    } finally {
+      setFuncaoRunning(false);
+    }
+  };
+
   const handleSend = async () => {
-    if (!input.trim() || selectedVersionIds.length === 0) {
+    const trimmed = input.trim();
+
+    // Slash command: /comparar
+    if (trimmed === '/comparar') {
+      router.push(`/chapters/${currentChapterId}/compare`);
+      setInput('');
+      return;
+    }
+
+    // Slash command: /funcao
+    if (trimmed.startsWith('/funcao')) {
+      setInput('');
+      setFuncaoDialogOpen(true);
+      return;
+    }
+
+    if (!trimmed || selectedVersionIds.length === 0) {
       if (selectedVersionIds.length === 0) {
         toast.error('Selecione pelo menos um capítulo');
       }
@@ -371,13 +467,41 @@ export function ChapterChat({ currentChapterId, allChapters }: ChapterChatProps)
               </div>
             </div>
 
+            {/* Slash command hints */}
+            {input.startsWith('/') && (
+              <div className="flex gap-2 flex-wrap">
+                {input === '/' || '/comparar'.startsWith(input) ? (
+                  <button
+                    type="button"
+                    onClick={() => setInput('/comparar')}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-xs text-gray-300 transition-colors"
+                  >
+                    <GitCompare className="h-3 w-3 text-blue-400" />
+                    /comparar
+                    <span className="text-gray-500">— abrir comparador</span>
+                  </button>
+                ) : null}
+                {input === '/' || '/funcao'.startsWith(input) ? (
+                  <button
+                    type="button"
+                    onClick={() => setInput('/funcao')}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-xs text-gray-300 transition-colors"
+                  >
+                    <Zap className="h-3 w-3 text-yellow-400" />
+                    /funcao
+                    <span className="text-gray-500">— executar todas as operações</span>
+                  </button>
+                ) : null}
+              </div>
+            )}
+
             {/* Input */}
             <div className="flex gap-2">
               <Input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Digite sua pergunta..."
+                placeholder="Digite sua pergunta ou /comparar, /funcao..."
                 disabled={loading || selectedVersionIds.length === 0}
                 className="flex-1"
               />
@@ -433,6 +557,114 @@ export function ChapterChat({ currentChapterId, allChapters }: ChapterChatProps)
           currentChapterId={currentChapterId}
         />
       </div>
+
+      {/* /funcao Dialog */}
+      <Dialog open={funcaoDialogOpen} onOpenChange={setFuncaoDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Zap className="h-5 w-5 text-yellow-400" />
+              Executar Operações
+            </DialogTitle>
+            <DialogDescription>
+              Escolha o modo e as operações a executar na versão atual do capítulo.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            {/* Mode selection */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setFuncaoMode('preset')}
+                className={`p-3 rounded-lg border text-sm font-medium transition-colors text-left ${
+                  funcaoMode === 'preset'
+                    ? 'border-red-500/50 bg-red-500/10 text-red-400'
+                    : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10'
+                }`}
+              >
+                <div className="font-semibold mb-0.5">Predefinido</div>
+                <div className="text-xs opacity-70">Instruções padrão de melhoria acadêmica</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFuncaoMode('custom')}
+                className={`p-3 rounded-lg border text-sm font-medium transition-colors text-left ${
+                  funcaoMode === 'custom'
+                    ? 'border-red-500/50 bg-red-500/10 text-red-400'
+                    : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10'
+                }`}
+              >
+                <div className="font-semibold mb-0.5">Personalizado</div>
+                <div className="text-xs opacity-70">Configure suas próprias instruções</div>
+              </button>
+            </div>
+
+            {/* Custom instructions */}
+            {funcaoMode === 'custom' && (
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Instruções de ajuste</Label>
+                <Textarea
+                  placeholder="Descreva como deseja que o texto seja ajustado..."
+                  value={funcaoInstructions}
+                  onChange={(e) => setFuncaoInstructions(e.target.value)}
+                  rows={3}
+                  className="resize-none"
+                />
+              </div>
+            )}
+
+            {/* Operations to run */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Operações</Label>
+              <div className="space-y-2">
+                {[
+                  { key: 'adjust', label: 'Ajustar', description: 'Melhora clareza e linguagem acadêmica' },
+                  { key: 'update', label: 'Revisar normas', description: 'Atualiza conforme normas acadêmicas' },
+                  { key: 'translate', label: 'Traduzir para Português', description: 'Traduz para pt-BR' },
+                ].map(({ key, label, description }) => (
+                  <div key={key} className="flex items-start gap-3 p-2 rounded-lg bg-white/[0.03] border border-white/5">
+                    <Checkbox
+                      id={`funcao-op-${key}`}
+                      checked={funcaoOps[key as keyof typeof funcaoOps]}
+                      onCheckedChange={(checked) =>
+                        setFuncaoOps(prev => ({ ...prev, [key]: !!checked }))
+                      }
+                      className="mt-0.5"
+                    />
+                    <label htmlFor={`funcao-op-${key}`} className="cursor-pointer">
+                      <div className="text-sm font-medium text-white">{label}</div>
+                      <div className="text-xs text-gray-500">{description}</div>
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2 justify-end pt-2">
+              <Button
+                variant="outline"
+                onClick={() => setFuncaoDialogOpen(false)}
+                disabled={funcaoRunning}
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleRunFuncao}
+                disabled={funcaoRunning || !Object.values(funcaoOps).some(Boolean)}
+                className="bg-red-600 hover:bg-red-700"
+              >
+                {funcaoRunning ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Iniciando...</>
+                ) : (
+                  <><Zap className="h-4 w-4 mr-2" />Executar</>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
