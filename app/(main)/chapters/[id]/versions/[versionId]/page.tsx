@@ -71,6 +71,10 @@ export default function ChapterVersionPage() {
   const chapterId = params.id as string;
   const versionId = params.versionId as string;
 
+  useEffect(() => {
+    router.replace(`/chapters/${chapterId}/agent`);
+  }, [chapterId, router]);
+
   const [version, setVersion] = useState<ChapterVersion | null>(null);
   const [allVersions, setAllVersions] = useState<ChapterVersion[]>([]);
   const [loading, setLoading] = useState(true);
