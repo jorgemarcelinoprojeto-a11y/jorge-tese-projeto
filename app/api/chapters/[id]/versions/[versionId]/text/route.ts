@@ -1,46 +1,51 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import mammoth from 'mammoth';
 
+/**
+ * GET /api/chapters/[id]/versions/[versionId]/text
+ * Returns the text content of a version assembled from its stored chunks.
+ */
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ id: string; versionId: string }> }
 ) {
   try {
-    const { versionId } = await params;
+    const { id: chapterId, versionId } = await params;
 
-    const { data: version, error } = await supabase
+    // Verify version belongs to chapter
+    const { data: version, error: versionError } = await supabase
       .from('chapter_versions')
-      .select('file_path, version_number')
+      .select('id, version_number, created_by_operation, created_at, pages')
       .eq('id', versionId)
+      .eq('chapter_id', chapterId)
       .single();
 
-    if (error || !version) {
+    if (versionError || !version) {
       return NextResponse.json({ error: 'Version not found' }, { status: 404 });
     }
 
-    const { data: fileBlob, error: downloadError } = await supabase.storage
-      .from('documents')
-      .download(version.file_path);
+    // Fetch chunks ordered by index
+    const { data: chunks, error: chunksError } = await supabase
+      .from('chapter_chunks')
+      .select('chunk_index, text, page_from, page_to')
+      .eq('chapter_version_id', versionId)
+      .order('chunk_index', { ascending: true });
 
-    if (downloadError || !fileBlob) {
-      return NextResponse.json({ error: 'Failed to download file' }, { status: 500 });
-    }
+    if (chunksError) throw chunksError;
 
-    const arrayBuffer = await fileBlob.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    const text = (chunks || []).map((c) => c.text).join('\n\n');
 
-    let text = '';
-    try {
-      const result = await mammoth.extractRawText({ buffer });
-      text = result.value;
-    } catch {
-      // If not a docx, try reading as plain text
-      text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\tÀ-ɏ]/g, ' ');
-    }
-
-    return NextResponse.json({ text, versionNumber: version.version_number });
+    return NextResponse.json({
+      versionId,
+      versionNumber: version.version_number,
+      operation: version.created_by_operation,
+      createdAt: version.created_at,
+      pages: version.pages,
+      text,
+      chunkCount: (chunks || []).length,
+    });
   } catch (error: any) {
+    console.error('[VERSION-TEXT] Error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

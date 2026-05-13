@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -44,7 +44,15 @@ type AIResponse = {
 
 export default function DocumentPage() {
   const params = useParams();
+  const router = useRouter();
   const documentId = params.id as string;
+
+  // Modo antigo desativado — redireciona para o dashboard
+  useEffect(() => {
+    router.replace('/');
+  }, [router]);
+
+  return null;
 
   const [document, setDocument] = useState<Document | null>(null);
   const [loading, setLoading] = useState(true);

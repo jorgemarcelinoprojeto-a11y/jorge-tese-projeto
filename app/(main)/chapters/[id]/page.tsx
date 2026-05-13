@@ -1,13 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, BookOpen, FileText, Clock, Layers, Bot, Sparkles } from 'lucide-react';
+import { ArrowLeft, BookOpen, FileText, Layers, Bell, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import Link from 'next/link';
 import { ChapterChat } from '@/components/thesis/chapter-chat';
 import { VersionHistory } from '@/components/thesis/version-history';
 type ChapterVersion = {
@@ -44,8 +43,20 @@ export default function ChapterPage() {
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [allChapters, setAllChapters] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeJobs, setActiveJobs] = useState<any[]>([]);
+  const [pendingNotifications, setPendingNotifications] = useState<string[]>([]);
+  const prevJobStatusRef = useRef<Record<string, string>>({});
 
-  const loadChapter = async () => {
+  const OPERATION_LABELS: Record<string, string> = {
+    upload: 'Upload',
+    improve: 'Melhoria',
+    translate: 'Tradução',
+    adjust: 'Ajuste',
+    adapt: 'Adaptação',
+    update: 'Revisão de normas',
+  };
+
+  const loadChapter = useCallback(async () => {
     try {
       setLoading(true);
 
@@ -94,18 +105,74 @@ export default function ChapterPage() {
       }
 
       console.log('[CHAPTER-PAGE] Loaded chapter:', chapterData.chapter.title);
-      console.log('[CHAPTER-PAGE] Loaded versions:', versions.length);
     } catch (error: any) {
       console.error('[CHAPTER-PAGE] Error loading chapter:', error);
       toast.error(error.message || 'Erro ao carregar capítulo');
     } finally {
       setLoading(false);
     }
-  };
+  }, [chapterId]);
+
+  const pollJobs = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/chapters/${chapterId}/jobs`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const jobs: any[] = data.jobs || [];
+
+      // Detect newly completed jobs
+      const prev = prevJobStatusRef.current;
+      const newNotifications: string[] = [];
+
+      jobs.forEach((job) => {
+        const wasActive =
+          prev[job.id] === 'pending' || prev[job.id] === 'processing';
+        if (wasActive && job.status === 'completed') {
+          const label = OPERATION_LABELS[job.operation] || job.operation;
+          toast.success(`${label} concluída!`, {
+            description: 'Clique em uma versão para ver o resultado.',
+            duration: 6000,
+          });
+          newNotifications.push(`${label} concluída`);
+        }
+        if (wasActive && job.status === 'error') {
+          const label = OPERATION_LABELS[job.operation] || job.operation;
+          toast.error(`Erro em ${label}`, {
+            description: job.errorMessage || 'Tente novamente.',
+          });
+        }
+      });
+
+      // Update ref
+      const next: Record<string, string> = {};
+      jobs.forEach((j) => (next[j.id] = j.status));
+      prevJobStatusRef.current = next;
+
+      const active = jobs.filter(
+        (j) => j.status === 'pending' || j.status === 'processing'
+      );
+      setActiveJobs(active);
+
+      if (newNotifications.length > 0) {
+        setPendingNotifications((p) => [...p, ...newNotifications]);
+        // Reload chapter data to reflect new versions
+        loadChapter();
+      }
+    } catch {
+      // Non-fatal polling error
+    }
+  }, [chapterId, loadChapter]);
+
+  // Poll active jobs every 5s
+  useEffect(() => {
+    pollJobs();
+    const id = setInterval(pollJobs, 5000);
+    return () => clearInterval(id);
+  }, [pollJobs]);
 
   useEffect(() => {
     loadChapter();
-  }, [chapterId]);
+  }, [loadChapter]);
 
   if (loading) {
     return (
@@ -163,7 +230,7 @@ export default function ChapterPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center gap-4">
         <Button
           variant="ghost"
           size="sm"
@@ -172,18 +239,39 @@ export default function ChapterPage() {
           <ArrowLeft className="h-4 w-4 mr-2" />
           Voltar para Tese
         </Button>
-
-        <Link href={`/chapters/${chapterId}/agent`}>
-          <Button
-            size="sm"
-            className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white shadow-lg shadow-red-500/20 gap-2"
-          >
-            <Bot className="h-4 w-4" />
-            Abrir Modo Agente
-            <Sparkles className="h-3 w-3" />
-          </Button>
-        </Link>
       </div>
+
+      {/* Active jobs banner */}
+      {activeJobs.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20 text-sm text-yellow-300">
+          <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+          <span>
+            {activeJobs.length === 1
+              ? `1 operação em andamento: ${OPERATION_LABELS[activeJobs[0].operation] || activeJobs[0].operation}...`
+              : `${activeJobs.length} operações em andamento...`}
+          </span>
+        </div>
+      )}
+
+      {/* Pending notifications badge */}
+      {pendingNotifications.length > 0 && (
+        <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-green-500/10 border border-green-500/20 text-sm text-green-300">
+          <div className="flex items-center gap-2">
+            <Bell className="h-4 w-4 shrink-0" />
+            <span>
+              {pendingNotifications.length === 1
+                ? pendingNotifications[0]
+                : `${pendingNotifications.length} operações concluídas`}
+            </span>
+          </div>
+          <button
+            className="text-xs text-green-400 hover:text-green-200 transition-colors"
+            onClick={() => setPendingNotifications([])}
+          >
+            Dispensar
+          </button>
+        </div>
+      )}
 
       {/* Chapter Info */}
       <div className="space-y-4">
