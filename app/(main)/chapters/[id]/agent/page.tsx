@@ -68,6 +68,7 @@ type ChatMessage = {
   command?: string;
   status?: 'pending' | 'running' | 'success' | 'error';
   jobId?: string;
+  jobResultHref?: string;
   newVersionId?: string;
   errorMessage?: string;
   aiProvider?: AIProvider;
@@ -503,7 +504,7 @@ export default function AgentModePage() {
         return;
       }
       const { jobId: jobId1 } = await res1.json();
-      updateMessage(asstId1, { jobId: jobId1 });
+      updateMessage(asstId1, { jobId: jobId1, jobResultHref: `/chapters/${chapterId}/translate/${jobId1}` });
       const newVId1 = await pollJob(jobId1, asstId1, 'Passo 1/3 — Tradução para português', { silent: true });
       if (newVId1) workingVersionId = newVId1;
     } catch (e: any) {
@@ -537,7 +538,7 @@ export default function AgentModePage() {
         return;
       }
       const { jobId: jobId2 } = await res2.json();
-      updateMessage(asstId2, { jobId: jobId2 });
+      updateMessage(asstId2, { jobId: jobId2, jobResultHref: `/chapters/${chapterId}/adapt/${jobId2}` });
       const newVId2 = await pollJob(jobId2, asstId2, 'Passo 2/3 — Adaptação simplificada', { silent: true });
       if (newVId2) workingVersionId = newVId2;
     } catch (e: any) {
@@ -565,11 +566,8 @@ export default function AgentModePage() {
         updateMessage(asstId3, { status: 'error', content: `Passo 3 falhou: ${err.error || 'Erro'}` });
       } else {
         const { jobId: jobId3 } = await res3.json();
-        updateMessage(asstId3, {
-          status: 'success',
-          jobId: jobId3,
-          content: 'Passo 3/3 — Revisão de normas iniciada em segundo plano.',
-        });
+        updateMessage(asstId3, { jobId: jobId3, jobResultHref: `/chapters/${chapterId}/update/${jobId3}` });
+        await pollJob(jobId3, asstId3, 'Passo 3/3 — Revisão de leis', { silent: true });
       }
     } catch (e: any) {
       updateMessage(asstId3, { status: 'error', content: `Passo 3 falhou: ${e.message}` });
@@ -1005,6 +1003,11 @@ export default function AgentModePage() {
                     key={msg.id}
                     message={msg}
                     chapterId={chapterId}
+                    versions={versions}
+                    onViewVersion={(vId) => {
+                      setSelectedVersionId(vId);
+                      setShowDoc(true);
+                    }}
                     onApplyPendingEdit={(prompt) => {
                       updateMessage(msg.id, { pendingEditPrompt: undefined });
                       setSending(true);
@@ -1188,12 +1191,14 @@ function WelcomeBlock({ onPick }: { onPick: (cmd: string) => void }) {
 // ─── MessageBubble ────────────────────────────────────────────────────────────
 
 function MessageBubble({
-  message, chapterId, onApplied, onApplyPendingEdit,
+  message, chapterId, versions, onApplied, onApplyPendingEdit, onViewVersion,
 }: {
   message: ChatMessage;
   chapterId: string;
+  versions?: ChapterVersion[];
   onApplied: () => void;
   onApplyPendingEdit?: (prompt: string) => void;
+  onViewVersion?: (versionId: string) => void;
 }) {
   const [applying, setApplying] = useState(false);
 
@@ -1273,22 +1278,65 @@ function MessageBubble({
             <div className="flex items-center gap-2 text-xs text-gray-500">
               <Loader2 className="h-3 w-3 animate-spin" />
               Processando...
+              {message.command === '/todos' && message.jobResultHref && (
+                <Link
+                  href={message.jobResultHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300 ml-1"
+                >
+                  Ver operação ↗
+                </Link>
+              )}
             </div>
-            <p className="text-[11px] text-gray-600 leading-relaxed">
-              Pode sair desta página — a operação continua no servidor.
-            </p>
-            {message.jobId && (
-              <button
-                onClick={async (e) => {
-                  e.preventDefault();
-                  if (!confirm('Cancelar esta operação?')) return;
-                  await cancelJobRequest(message.jobId!, 'chapter-operation');
-                }}
-                className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-red-400 transition-colors"
+            {message.command !== '/todos' && (
+              <>
+                <p className="text-[11px] text-gray-600 leading-relaxed">
+                  Pode sair desta página — a operação continua no servidor.
+                </p>
+                {message.jobId && (
+                  <button
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      if (!confirm('Cancelar esta operação?')) return;
+                      await cancelJobRequest(message.jobId!, 'chapter-operation');
+                    }}
+                    className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-red-400 transition-colors"
+                  >
+                    <Ban className="h-3 w-3" />
+                    Cancelar
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {message.status === 'success' && message.command === '/todos' && (message.newVersionId || message.jobResultHref) && (
+          <div className="flex items-center gap-2 pt-1 flex-wrap">
+            {message.newVersionId && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onViewVersion?.(message.newVersionId!)}
+                className="h-7 text-xs border-white/15 text-gray-300 hover:bg-white/10 gap-1"
               >
-                <Ban className="h-3 w-3" />
-                Cancelar
-              </button>
+                <FileText className="h-3 w-3" />
+                {(() => {
+                  const vNum = versions?.find(v => v.id === message.newVersionId)?.versionNumber;
+                  return vNum ? `Ver versão v${vNum}` : 'Ver versão';
+                })()}
+              </Button>
+            )}
+            {message.jobResultHref && (
+              <Link
+                href={message.jobResultHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-gray-400 hover:text-white underline-offset-2 hover:underline"
+              >
+                Ver operação ↗
+              </Link>
             )}
           </div>
         )}
