@@ -40,6 +40,11 @@ export default function ChapterPage() {
   const router = useRouter();
   const chapterId = params.id as string;
 
+  // Redirect immediately to Agent Mode — that is the primary experience.
+  useEffect(() => {
+    router.replace(`/chapters/${chapterId}/agent`);
+  }, [chapterId, router]);
+
   const [chapter, setChapter] = useState<Chapter | null>(null);
   const [versions, setVersions] = useState<ChapterVersion[]>([]);
   const [allChapters, setAllChapters] = useState<any[]>([]);
