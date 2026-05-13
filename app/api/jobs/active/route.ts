@@ -51,7 +51,7 @@ export async function GET(_req: NextRequest) {
 
     // 1. Chapter operations (translate/adapt/adjust/improve/update inside a chapter)
     try {
-      const { data: chapterJobs } = await supabase
+      const { data: chapterJobs, error } = await supabase
         .from('chapter_operation_jobs')
         .select(`
           id, status, progress, error_message, created_at, completed_at,
@@ -61,6 +61,8 @@ export async function GET(_req: NextRequest) {
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .limit(50);
+
+      if (error) console.error('[JOBS] chapter_operation_jobs select error:', error);
 
       for (const j of chapterJobs ?? []) {
         const ch: any = (j as any).chapters;
@@ -98,10 +100,10 @@ export async function GET(_req: NextRequest) {
 
     // 2. Translation jobs (document-level)
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('translation_jobs')
         .select(`
-          id, status, progress, error_message, created_at, completed_at,
+          id, status, progress_percentage, error_message, created_at, completed_at,
           document_id,
           documents (title, project_id)
         `)
@@ -109,13 +111,15 @@ export async function GET(_req: NextRequest) {
         .order('created_at', { ascending: false })
         .limit(50);
 
+      if (error) console.error('[JOBS] translation_jobs select error:', error);
+
       for (const j of data ?? []) {
         const d: any = (j as any).documents;
         jobs.push({
           id: (j as any).id,
           type: 'translate',
           status: normalizeStatus((j as any).status, (j as any).error_message),
-          progress: Number((j as any).progress) || 0,
+          progress: Number((j as any).progress_percentage) || 0,
           errorMessage: (j as any).error_message ?? undefined,
           createdAt: (j as any).created_at,
           completedAt: (j as any).completed_at,
@@ -134,7 +138,7 @@ export async function GET(_req: NextRequest) {
 
     // 3. Adjust jobs (document-level)
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('adjust_jobs')
         .select(`
           id, status, progress_percentage, error_message, created_at, completed_at,
@@ -144,6 +148,8 @@ export async function GET(_req: NextRequest) {
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .limit(50);
+
+      if (error) console.error('[JOBS] adjust_jobs select error:', error);
 
       for (const j of data ?? []) {
         const d: any = (j as any).documents;
@@ -170,7 +176,7 @@ export async function GET(_req: NextRequest) {
 
     // 4. Adapt jobs (document-level)
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('adapt_jobs')
         .select(`
           id, status, progress_percentage, error_message, created_at, completed_at,
@@ -180,6 +186,8 @@ export async function GET(_req: NextRequest) {
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .limit(50);
+
+      if (error) console.error('[JOBS] adapt_jobs select error:', error);
 
       for (const j of data ?? []) {
         const d: any = (j as any).documents;
@@ -206,10 +214,10 @@ export async function GET(_req: NextRequest) {
 
     // 5. Improvement jobs (document-level)
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('improvement_jobs')
         .select(`
-          id, status, progress, error_message, created_at, completed_at,
+          id, status, progress_percentage, error_message, created_at, completed_at,
           document_id,
           documents (title, project_id)
         `)
@@ -217,13 +225,15 @@ export async function GET(_req: NextRequest) {
         .order('created_at', { ascending: false })
         .limit(50);
 
+      if (error) console.error('[JOBS] improvement_jobs select error:', error);
+
       for (const j of data ?? []) {
         const d: any = (j as any).documents;
         jobs.push({
           id: (j as any).id,
           type: 'improve',
           status: normalizeStatus((j as any).status, (j as any).error_message),
-          progress: Number((j as any).progress) || 0,
+          progress: Number((j as any).progress_percentage) || 0,
           errorMessage: (j as any).error_message ?? undefined,
           createdAt: (j as any).created_at,
           completedAt: (j as any).completed_at,
@@ -240,14 +250,16 @@ export async function GET(_req: NextRequest) {
       console.error('[JOBS] improvement_jobs error:', e);
     }
 
-    // 6. Norms update jobs
+    // 6. Norms update jobs (uses progress_percentage)
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('norm_update_jobs')
         .select('*')
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .limit(50);
+
+      if (error) console.error('[JOBS] norm_update_jobs select error:', error);
 
       for (const j of data ?? []) {
         const isChapter = !!(j as any).chapter_id;
