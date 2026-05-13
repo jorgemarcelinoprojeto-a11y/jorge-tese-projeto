@@ -11,11 +11,12 @@ import {
   ArrowLeft, Send, FileText, PanelLeftClose, PanelLeftOpen, Sparkles,
   Loader2, Trash2, Languages, Wand2, Sliders, SearchCheck, ArrowLeftRight,
   CheckCircle2, AlertCircle, Bot, User as UserIcon, Download, BookOpen,
-  ChevronDown, Cpu, Ban
+  ChevronDown, Cpu, Ban, History, PlayCircle, ChevronUp, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { VersionDiff } from '@/components/thesis/version-diff';
+import { VersionHistory } from '@/components/thesis/version-history';
 import { AIErrorBanner } from '@/components/ai-error-banner';
 import { classifyAIError } from '@/lib/ai-error-message';
 import { cancelJobRequest } from '@/components/jobs-status-button';
@@ -69,11 +70,8 @@ type ChatMessage = {
   jobId?: string;
   newVersionId?: string;
   errorMessage?: string;
-  /** AI used to produce this message — shown to the user as proof. */
   aiProvider?: AIProvider;
   aiModel?: string;
-  /** When the AI detected an edit-intent from free text, this is the precise
-   * instruction the user can confirm to send to /ajustar. */
   pendingEditPrompt?: string;
 };
 
@@ -87,13 +85,14 @@ type SlashCommand = {
 };
 
 const COMMANDS: SlashCommand[] = [
-  { name: '/perguntar', args: '<pergunta>',   example: '/perguntar qual o tema deste capítulo',  description: 'Pergunte algo sobre o documento — sem gerar versão',   icon: <Bot         className="h-4 w-4" />, color: 'text-cyan-400' },
-  { name: '/traduzir',  args: '<idioma>',     example: '/traduzir inglês',                       description: 'Traduz a versão atual para outro idioma',               icon: <Languages   className="h-4 w-4" />, color: 'text-purple-400' },
-  { name: '/adaptar',   args: '<estilo>',     example: '/adaptar simplificado',                  description: 'Adapta o tom (academic, professional, simplified)',     icon: <Wand2       className="h-4 w-4" />, color: 'text-pink-400' },
-  { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',          description: 'Aplica uma edição: IA cria uma nova versão',            icon: <Sliders     className="h-4 w-4" />, color: 'text-orange-400' },
-  { name: '/revisar',   args: '',             example: '/revisar',                               description: 'Verifica se leis citadas continuam vigentes',           icon: <SearchCheck className="h-4 w-4" />, color: 'text-yellow-400' },
-  { name: '/diff',      args: '[v1] [v2]',    example: '/diff 1 atual',                          description: 'Compara duas versões (padrão: original vs atual)',      icon: <ArrowLeftRight className="h-4 w-4" />, color: 'text-blue-400' },
-  { name: '/limpar',    args: '',             example: '/limpar',                                description: 'Limpa a conversa',                                       icon: <Trash2      className="h-4 w-4" />, color: 'text-gray-400' },
+  { name: '/perguntar', args: '<pergunta>',   example: '/perguntar qual o tema deste capítulo',  description: 'Pergunte algo sobre o documento — sem gerar versão',    icon: <Bot            className="h-4 w-4" />, color: 'text-cyan-400' },
+  { name: '/traduzir',  args: '<idioma>',     example: '/traduzir inglês',                       description: 'Traduz a versão atual para outro idioma',                icon: <Languages      className="h-4 w-4" />, color: 'text-purple-400' },
+  { name: '/adaptar',   args: '<estilo>',     example: '/adaptar simplificado',                  description: 'Adapta o tom (academic, professional, simplified)',      icon: <Wand2          className="h-4 w-4" />, color: 'text-pink-400' },
+  { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',          description: 'Aplica uma edição: IA cria uma nova versão',             icon: <Sliders        className="h-4 w-4" />, color: 'text-orange-400' },
+  { name: '/revisar',   args: '',             example: '/revisar',                               description: 'Verifica se leis citadas continuam vigentes',            icon: <SearchCheck    className="h-4 w-4" />, color: 'text-yellow-400' },
+  { name: '/diff',      args: '[v1] [v2]',    example: '/diff 1 atual',                          description: 'Compara duas versões (padrão: original vs atual)',       icon: <ArrowLeftRight className="h-4 w-4" />, color: 'text-blue-400' },
+  { name: '/todos',     args: '',             example: '/todos',                                 description: 'Executa: ajuste erudito → revisão de leis → tradução pt', icon: <PlayCircle    className="h-4 w-4" />, color: 'text-green-400' },
+  { name: '/limpar',    args: '',             example: '/limpar',                                description: 'Limpa a conversa',                                        icon: <Trash2        className="h-4 w-4" />, color: 'text-gray-400' },
 ];
 
 const LANGUAGE_MAP: Record<string, string> = {
@@ -124,6 +123,7 @@ export default function AgentModePage() {
   const [loadingChapter, setLoadingChapter] = useState(true);
 
   const [showDoc, setShowDoc] = useState(true);
+  const [showHistory, setShowHistory] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -131,14 +131,11 @@ export default function AgentModePage() {
 
   const [settings, setSettings] = useState<Settings | null>(null);
 
-  // AI selection
   const [selectedProvider, setSelectedProvider] = useState<AIProvider>('gemini');
   const [selectedModel, setSelectedModel] = useState<string>('');
 
-  // Sibling chapters (for chapter switcher in the same thesis)
   const [siblings, setSiblings] = useState<SiblingChapter[]>([]);
 
-  // Diff dialog
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffLeft, setDiffLeft] = useState<ChapterVersion | null>(null);
   const [diffRight, setDiffRight] = useState<ChapterVersion | null>(null);
@@ -148,7 +145,8 @@ export default function AgentModePage() {
 
   const storageKey = `agent-chat-${chapterId}`;
 
-  // Load chapter + versions
+  // ─── Data loading ────────────────────────────────────────────────────────────
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -179,7 +177,6 @@ export default function AgentModePage() {
     return () => { cancelled = true; };
   }, [chapterId]);
 
-  // Load settings + initialize default provider/model
   useEffect(() => {
     (async () => {
       try {
@@ -187,8 +184,6 @@ export default function AgentModePage() {
         const data = await res.json();
         const s: Settings = data.settings || {};
         setSettings(s);
-
-        // Pick first provider with at least one model — prefer Gemini, then Claude, then OpenAI, then Grok
         const preference: AIProvider[] = ['gemini', 'anthropic', 'openai', 'grok'];
         for (const p of preference) {
           const models = s.models?.[p];
@@ -202,7 +197,6 @@ export default function AgentModePage() {
     })();
   }, []);
 
-  // Load sibling chapters of the same thesis
   useEffect(() => {
     if (!chapter?.thesisId) return;
     let cancelled = false;
@@ -221,7 +215,6 @@ export default function AgentModePage() {
     return () => { cancelled = true; };
   }, [chapter?.thesisId]);
 
-  // Load chat history from localStorage
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -230,7 +223,6 @@ export default function AgentModePage() {
     } catch {}
   }, [storageKey]);
 
-  // Persist chat
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -238,7 +230,6 @@ export default function AgentModePage() {
     } catch {}
   }, [messages, storageKey]);
 
-  // Load document text when selected version changes
   useEffect(() => {
     if (!selectedVersionId) return;
     let cancelled = false;
@@ -259,12 +250,13 @@ export default function AgentModePage() {
     return () => { cancelled = true; };
   }, [chapterId, selectedVersionId]);
 
-  // Auto-scroll chat
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  // ─── Derived state ───────────────────────────────────────────────────────────
 
   const currentVersion = versions.find((v) => v.id === selectedVersionId) ?? null;
   const originalVersion = versions[0] ?? null;
@@ -278,6 +270,21 @@ export default function AgentModePage() {
       (p) => (settings?.models?.[p]?.length ?? 0) > 0
     );
   }, [settings]);
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
+
+  const refreshVersions = async (): Promise<ChapterVersion[]> => {
+    try {
+      const d = await fetch(`/api/chapters/${chapterId}/versions`).then(r => r.json());
+      const list: ChapterVersion[] = (d.versions || []).sort(
+        (a: any, b: any) => a.versionNumber - b.versionNumber
+      );
+      setVersions(list);
+      return list;
+    } catch {
+      return [];
+    }
+  };
 
   const handleDownload = async () => {
     if (!selectedVersionId) return;
@@ -299,6 +306,25 @@ export default function AgentModePage() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!chapter) return;
+    const confirmed = window.confirm(
+      `Excluir permanentemente o capítulo "${chapter.title}"?\n\nTodas as versões serão removidas. Esta ação não pode ser desfeita.`
+    );
+    if (!confirmed) return;
+    try {
+      const res = await fetch(`/api/chapters/${chapterId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Falha ao excluir');
+      }
+      toast.success('Capítulo excluído com sucesso.');
+      router.push(chapter.thesisId ? `/theses/${chapter.thesisId}` : '/');
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao excluir capítulo');
+    }
+  };
+
   const appendMessage = (msg: Omit<ChatMessage, 'id' | 'timestamp'>) => {
     const full: ChatMessage = { ...msg, id: crypto.randomUUID(), timestamp: Date.now() };
     setMessages((prev) => [...prev, full]);
@@ -309,7 +335,16 @@ export default function AgentModePage() {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
   };
 
-  const pollJob = async (jobId: string, asstId: string, opLabel: string) => {
+  /**
+   * Polls a chapter operation job until completion.
+   * Returns the newVersionId if the operation created one, otherwise null.
+   */
+  const pollJob = async (
+    jobId: string,
+    asstId: string,
+    opLabel: string,
+    opts?: { silent?: boolean }
+  ): Promise<string | null> => {
     const start = Date.now();
     const TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -324,33 +359,40 @@ export default function AgentModePage() {
         if (job.status === 'completed' || job.status === 'success') {
           updateMessage(asstId, {
             status: 'success',
-            content: `${opLabel} concluído. Nova versão criada como rascunho — clique em "Ver detalhes" para revisar e aplicar.`,
+            content: `${opLabel} concluído. Nova versão criada — use o histórico abaixo para revisar.`,
             jobId,
             newVersionId: job.newVersionId,
           });
-          // Refresh versions
-          fetch(`/api/chapters/${chapterId}/versions`).then(r => r.json()).then(d => {
-            const list = (d.versions || []).sort((a: any, b: any) => a.versionNumber - b.versionNumber);
-            setVersions(list);
-          }).catch(() => {});
-          return;
+
+          // Refresh versions and auto-select the new one
+          const freshList = await refreshVersions();
+          if (job.newVersionId) {
+            setSelectedVersionId(job.newVersionId);
+          } else {
+            const newest = freshList[freshList.length - 1];
+            if (newest && newest.id !== selectedVersionId) setSelectedVersionId(newest.id);
+          }
+
+          if (!opts?.silent) {
+            toast.success(`${opLabel} concluído!`, {
+              description: 'Nova versão disponível no histórico.',
+              duration: 5000,
+            });
+          }
+          return job.newVersionId ?? null;
         }
+
         if (job.status === 'failed' || job.status === 'error') {
           const errMsg = job.errorMessage || job.error || 'Falha desconhecida';
-          // Cancellation is encoded as error + special marker
           if (errMsg.includes('__CANCELLED_BY_USER__')) {
             updateMessage(asstId, {
               status: 'success',
-              content: 'Operação cancelada. Nenhum crédito adicional foi gasto a partir da próxima chamada.',
+              content: 'Operação cancelada. Nenhum crédito adicional foi gasto.',
             });
-            return;
+            return null;
           }
           const info = classifyAIError(errMsg);
-          updateMessage(asstId, {
-            status: 'error',
-            content: errMsg,
-          });
-          // Toast for quota errors so user notices immediately
+          updateMessage(asstId, { status: 'error', content: errMsg });
           if (info.kind === 'quota') {
             toast.error(info.title, { description: info.message, duration: 10000 });
           } else if (info.kind === 'rate-limit') {
@@ -358,9 +400,9 @@ export default function AgentModePage() {
           } else if (info.kind === 'auth') {
             toast.error(info.title, { description: info.message, duration: 10000 });
           }
-          return;
+          return null;
         }
-        // still running — update progress (job.progress is already 0-100, not 0-1)
+
         if (typeof job.progress === 'number') {
           const pct = job.progress > 1 ? Math.round(job.progress) : Math.round(job.progress * 100);
           updateMessage(asstId, { content: `${opLabel} em andamento... ${Math.min(100, pct)}%` });
@@ -370,19 +412,18 @@ export default function AgentModePage() {
 
     updateMessage(asstId, {
       status: 'error',
-      content: 'Tempo esgotado aguardando o resultado. Verifique a página de versões para ver o status.',
+      content: 'Tempo esgotado. Verifique o histórico de versões para ver o status.',
     });
+    return null;
   };
 
-  /**
-   * Runs the /ajustar pipeline for a given prompt. Reused by the slash command
-   * and by the "Aplicar edição" button on chat bubbles where the AI detected
-   * an edit-intent in free text.
-   */
-  const runAdjustPipeline = async (instructions: string) => {
-    if (!selectedVersionId) return;
+  const runAdjustPipeline = async (instructions: string): Promise<string | null> => {
+    if (!selectedVersionId) return null;
     const ai = currentAI;
-    if (!ai) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo.', status: 'error' }); return; }
+    if (!ai) {
+      appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo.', status: 'error' });
+      return null;
+    }
 
     const asstId = appendMessage({
       role: 'assistant',
@@ -405,11 +446,145 @@ export default function AgentModePage() {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       updateMessage(asstId, { status: 'error', content: err.error || 'Falha ao iniciar ajuste' });
-      return;
+      return null;
     }
     const data = await res.json();
     updateMessage(asstId, { jobId: data.jobId });
-    await pollJob(data.jobId, asstId, 'Ajuste');
+    return pollJob(data.jobId, asstId, 'Ajuste');
+  };
+
+  /**
+   * /todos — Executes 3 operations in sequence:
+   *   1. /ajustar texto mais erudito
+   *   2. /revisar leis
+   *   3. /traduzir para o português
+   */
+  const runTodosPipeline = async () => {
+    if (!selectedVersionId) {
+      appendMessage({ role: 'system', content: 'Selecione uma versão primeiro.', status: 'error' });
+      return;
+    }
+    const ai = currentAI;
+    if (!ai) {
+      appendMessage({ role: 'system', content: 'Selecione um provedor de IA antes de usar /todos.', status: 'error' });
+      return;
+    }
+
+    let workingVersionId = selectedVersionId;
+
+    appendMessage({
+      role: 'system',
+      content: '/todos — Iniciando sequência automática: (1) Ajuste erudito → (2) Revisão de leis → (3) Tradução para português',
+    });
+
+    // ── Passo 1: Ajustar para linguagem mais erudita ──────────────────────────
+    const asstId1 = appendMessage({
+      role: 'assistant',
+      content: 'Passo 1/3 — Ajustando para linguagem mais erudita e acadêmica...',
+      status: 'running',
+      command: '/todos',
+      aiProvider: ai.provider,
+      aiModel: ai.model,
+    });
+    try {
+      const res1 = await fetch(`/api/chapters/${chapterId}/adjust`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          versionId: workingVersionId,
+          instructions: 'Reescreva o texto em linguagem mais erudita, acadêmica e sofisticada, usando vocabulário formal e construções elaboradas, mantendo todas as informações, citações e referências originais intactas.',
+          creativity: 4,
+          provider: ai.provider, model: ai.model,
+          useGrounding: false, references: [], contextVersionIds: [],
+        }),
+      });
+      if (!res1.ok) {
+        const err = await res1.json().catch(() => ({}));
+        updateMessage(asstId1, { status: 'error', content: `Passo 1 falhou: ${err.error || 'Erro desconhecido'}` });
+        return;
+      }
+      const { jobId: jobId1 } = await res1.json();
+      updateMessage(asstId1, { jobId: jobId1 });
+      const newVId1 = await pollJob(jobId1, asstId1, 'Passo 1/3 — Ajuste erudito', { silent: true });
+      if (newVId1) workingVersionId = newVId1;
+      // If pollJob returned null due to error, continue anyway (best-effort)
+    } catch (e: any) {
+      updateMessage(asstId1, { status: 'error', content: `Passo 1 falhou: ${e.message}` });
+      return;
+    }
+
+    // ── Passo 2: Revisar leis ────────────────────────────────────────────────
+    const asstId2 = appendMessage({
+      role: 'assistant',
+      content: 'Passo 2/3 — Verificando vigência das leis e normas citadas...',
+      status: 'running',
+      command: '/todos',
+      aiProvider: ai.provider,
+      aiModel: ai.model,
+    });
+    try {
+      const res2 = await fetch(`/api/chapters/${chapterId}/versions/${workingVersionId}/norms-update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: ai.provider, model: ai.model }),
+      });
+      if (!res2.ok) {
+        const err = await res2.json().catch(() => ({}));
+        updateMessage(asstId2, { status: 'error', content: `Passo 2 falhou: ${err.error || 'Erro'}` });
+      } else {
+        const { jobId: jobId2 } = await res2.json();
+        updateMessage(asstId2, {
+          status: 'success',
+          jobId: jobId2,
+          content: 'Passo 2/3 — Revisão de normas iniciada em segundo plano. Prosseguindo para tradução...',
+        });
+      }
+    } catch (e: any) {
+      updateMessage(asstId2, { status: 'error', content: `Passo 2 falhou: ${e.message}` });
+    }
+
+    // ── Passo 3: Traduzir para português ─────────────────────────────────────
+    const asstId3 = appendMessage({
+      role: 'assistant',
+      content: 'Passo 3/3 — Traduzindo para o português...',
+      status: 'running',
+      command: '/todos',
+      aiProvider: ai.provider,
+      aiModel: ai.model,
+    });
+    try {
+      const res3 = await fetch(`/api/chapters/${chapterId}/translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          versionId: workingVersionId,
+          targetLanguage: 'pt',
+          provider: ai.provider, model: ai.model,
+          references: [],
+        }),
+      });
+      if (!res3.ok) {
+        const err = await res3.json().catch(() => ({}));
+        updateMessage(asstId3, { status: 'error', content: `Passo 3 falhou: ${err.error || 'Erro'}` });
+        return;
+      }
+      const { jobId: jobId3 } = await res3.json();
+      updateMessage(asstId3, { jobId: jobId3 });
+      await pollJob(jobId3, asstId3, 'Passo 3/3 — Tradução para português', { silent: true });
+    } catch (e: any) {
+      updateMessage(asstId3, { status: 'error', content: `Passo 3 falhou: ${e.message}` });
+      return;
+    }
+
+    appendMessage({
+      role: 'system',
+      content: '/todos concluído! As novas versões estão disponíveis no histórico abaixo.',
+    });
+    toast.success('/todos concluído!', {
+      description: 'Sequência completa: ajuste erudito + revisão de leis + tradução para português.',
+      duration: 7000,
+    });
+    setShowHistory(true);
   };
 
   const runChat = async (userText: string) => {
@@ -431,7 +606,6 @@ export default function AgentModePage() {
       aiModel: ai.model,
     });
 
-    // Build history for context (last few assistant chat messages)
     const history = messages
       .filter((m) => (m.role === 'user' || m.role === 'assistant') && (!m.command || m.command === '/perguntar'))
       .slice(-8)
@@ -464,11 +638,7 @@ export default function AgentModePage() {
           command: '/perguntar',
         });
       } else {
-        updateMessage(asstId, {
-          status: 'success',
-          content: data.reply,
-          command: '/perguntar',
-        });
+        updateMessage(asstId, { status: 'success', content: data.reply, command: '/perguntar' });
       }
     } catch (e: any) {
       updateMessage(asstId, { status: 'error', content: e.message || 'Erro ao conversar' });
@@ -479,7 +649,6 @@ export default function AgentModePage() {
     const trimmed = raw.trim();
     if (!trimmed) return;
 
-    // User message
     appendMessage({ role: 'user', content: trimmed });
     setInput('');
 
@@ -488,7 +657,6 @@ export default function AgentModePage() {
       return;
     }
 
-    // Parse slash command
     const isSlash = trimmed.startsWith('/');
     let cmd = '';
     let args = '';
@@ -497,8 +665,6 @@ export default function AgentModePage() {
       cmd = (spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx)).toLowerCase();
       args = spaceIdx === -1 ? '' : trimmed.slice(spaceIdx + 1).trim();
     } else {
-      // Free text: route to the chat endpoint which classifies into
-      // "chat" (just answer) or "edit" (offer to apply a /ajustar).
       setSending(true);
       try { await runChat(trimmed); } finally { setSending(false); }
       return;
@@ -514,7 +680,7 @@ export default function AgentModePage() {
 
         case '/perguntar': {
           if (!args) {
-            appendMessage({ role: 'system', content: 'Use: /perguntar <sua pergunta>. Ex: /perguntar qual o tema deste capítulo?', status: 'error' });
+            appendMessage({ role: 'system', content: 'Use: /perguntar <sua pergunta>.', status: 'error' });
             return;
           }
           await runChat(args);
@@ -529,31 +695,19 @@ export default function AgentModePage() {
             const first = parts[0].toLowerCase();
             if (first === 'atual') leftV = currentVersion;
             else if (first === 'original') leftV = originalVersion;
-            else {
-              const num = parseInt(first);
-              const found = versions.find((v) => v.versionNumber === num);
-              if (found) leftV = found;
-            }
+            else { const num = parseInt(first); const found = versions.find((v) => v.versionNumber === num); if (found) leftV = found; }
           }
           if (parts.length >= 2) {
             const second = parts[1].toLowerCase();
             if (second === 'atual') rightV = currentVersion;
             else if (second === 'original') rightV = originalVersion;
-            else {
-              const num = parseInt(second);
-              const found = versions.find((v) => v.versionNumber === num);
-              if (found) rightV = found;
-            }
+            else { const num = parseInt(second); const found = versions.find((v) => v.versionNumber === num); if (found) rightV = found; }
           }
           if (leftV && rightV) {
             setDiffLeft(leftV);
             setDiffRight(rightV);
             setDiffOpen(true);
-            appendMessage({
-              role: 'assistant',
-              content: `Abrindo comparação: v${leftV.versionNumber} ↔ v${rightV.versionNumber}`,
-              status: 'success',
-            });
+            appendMessage({ role: 'assistant', content: `Abrindo comparação: v${leftV.versionNumber} ↔ v${rightV.versionNumber}`, status: 'success' });
           } else {
             appendMessage({ role: 'system', content: 'Não foi possível encontrar as versões.', status: 'error' });
           }
@@ -571,30 +725,14 @@ export default function AgentModePage() {
             return;
           }
           const ai = currentAI;
-          if (!ai) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo (ou configure em Configurações).', status: 'error' }); return; }
-
-          const asstId = appendMessage({
-            role: 'assistant',
-            content: `Iniciando tradução para ${args}...`,
-            status: 'running',
-            command: cmd,
-            aiProvider: ai.provider,
-            aiModel: ai.model,
-          });
-
+          if (!ai) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA.', status: 'error' }); return; }
+          const asstId = appendMessage({ role: 'assistant', content: `Iniciando tradução para ${args}...`, status: 'running', command: cmd, aiProvider: ai.provider, aiModel: ai.model });
           const res = await fetch(`/api/chapters/${chapterId}/translate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              versionId: selectedVersionId, targetLanguage: lang,
-              provider: ai.provider, model: ai.model, references: [],
-            }),
+            body: JSON.stringify({ versionId: selectedVersionId, targetLanguage: lang, provider: ai.provider, model: ai.model, references: [] }),
           });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            updateMessage(asstId, { status: 'error', content: `Erro: ${err.error || 'Falha ao iniciar tradução'}` });
-            return;
-          }
+          if (!res.ok) { const err = await res.json().catch(() => ({})); updateMessage(asstId, { status: 'error', content: `Erro: ${err.error || 'Falha ao iniciar tradução'}` }); return; }
           const { jobId } = await res.json();
           updateMessage(asstId, { jobId });
           await pollJob(jobId, asstId, 'Tradução');
@@ -609,28 +747,14 @@ export default function AgentModePage() {
             return;
           }
           const ai = currentAI;
-          if (!ai) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo (ou configure em Configurações).', status: 'error' }); return; }
-
-          const asstId = appendMessage({
-            role: 'assistant', content: `Iniciando adaptação para estilo "${args}"...`,
-            status: 'running', command: cmd,
-            aiProvider: ai.provider, aiModel: ai.model,
-          });
-
+          if (!ai) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA.', status: 'error' }); return; }
+          const asstId = appendMessage({ role: 'assistant', content: `Iniciando adaptação para estilo "${args}"...`, status: 'running', command: cmd, aiProvider: ai.provider, aiModel: ai.model });
           const res = await fetch(`/api/chapters/${chapterId}/adapt`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              versionId: selectedVersionId, style,
-              provider: ai.provider, model: ai.model,
-              references: [], contextVersionIds: [],
-            }),
+            body: JSON.stringify({ versionId: selectedVersionId, style, provider: ai.provider, model: ai.model, references: [], contextVersionIds: [] }),
           });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            updateMessage(asstId, { status: 'error', content: `Erro: ${err.error || 'Falha ao iniciar adaptação'}` });
-            return;
-          }
+          if (!res.ok) { const err = await res.json().catch(() => ({})); updateMessage(asstId, { status: 'error', content: `Erro: ${err.error || 'Falha ao iniciar adaptação'}` }); return; }
           const { jobId } = await res.json();
           updateMessage(asstId, { jobId });
           await pollJob(jobId, asstId, 'Adaptação');
@@ -648,36 +772,28 @@ export default function AgentModePage() {
 
         case '/revisar': {
           const ai = currentAI;
-          if (!ai) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo (ou configure em Configurações).', status: 'error' }); return; }
-
-          const asstId = appendMessage({
-            role: 'assistant', content: 'Verificando vigência das leis e normas citadas...',
-            status: 'running', command: cmd,
-            aiProvider: ai.provider, aiModel: ai.model,
-          });
-
+          if (!ai) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA.', status: 'error' }); return; }
+          const asstId = appendMessage({ role: 'assistant', content: 'Verificando vigência das leis e normas citadas...', status: 'running', command: cmd, aiProvider: ai.provider, aiModel: ai.model });
           const res = await fetch(`/api/chapters/${chapterId}/versions/${selectedVersionId}/norms-update`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ provider: ai.provider, model: ai.model }),
           });
-          if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            updateMessage(asstId, { status: 'error', content: `Erro: ${err.error || 'Falha ao iniciar revisão'}` });
-            return;
-          }
+          if (!res.ok) { const err = await res.json().catch(() => ({})); updateMessage(asstId, { status: 'error', content: `Erro: ${err.error || 'Falha ao iniciar revisão'}` }); return; }
           const { jobId } = await res.json();
-          updateMessage(asstId, {
-            status: 'success', jobId,
-            content: `Revisão de normas iniciada. Acompanhe em /norms-update/${jobId}.`,
-          });
+          updateMessage(asstId, { status: 'success', jobId, content: `Revisão de normas iniciada. Acompanhe em /norms-update/${jobId}.` });
+          return;
+        }
+
+        case '/todos': {
+          await runTodosPipeline();
           return;
         }
 
         default: {
           appendMessage({
             role: 'system',
-            content: `Comando desconhecido: ${cmd}. Comandos disponíveis: ${COMMANDS.map(c => c.name).join(', ')}`,
+            content: `Comando desconhecido: ${cmd}. Disponíveis: ${COMMANDS.map(c => c.name).join(', ')}`,
             status: 'error',
           });
         }
@@ -714,8 +830,8 @@ export default function AgentModePage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-120px)] -mx-4 sm:-mx-6 md:-mx-8 -mt-6">
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-white/10 bg-black/40 backdrop-blur-xl gap-3">
+      {/* ── Top bar ──────────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-6 py-3 border-b border-white/10 bg-black/40 backdrop-blur-xl gap-3 flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <Button
             variant="ghost" size="sm"
@@ -732,23 +848,17 @@ export default function AgentModePage() {
             <Badge className="bg-red-500/15 text-red-400 border border-red-500/30 text-[10px] uppercase tracking-wider flex-shrink-0">Beta</Badge>
           </div>
 
-          {/* Chapter switcher (when there are siblings) */}
           {siblings.length > 1 && (
             <>
               <div className="h-5 w-px bg-white/10 flex-shrink-0" />
-              <Select
-                value={chapterId}
-                onValueChange={(v) => router.push(`/chapters/${v}/agent`)}
-              >
+              <Select value={chapterId} onValueChange={(v) => router.push(`/chapters/${v}/agent`)}>
                 <SelectTrigger className="w-[200px] h-9 bg-white/5 border-white/10 text-sm">
                   <BookOpen className="h-3.5 w-3.5 mr-1.5 text-gray-400 flex-shrink-0" />
                   <SelectValue placeholder="Capítulo" />
                 </SelectTrigger>
                 <SelectContent>
                   {siblings.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      Cap {c.chapterOrder}: {c.title}
-                    </SelectItem>
+                    <SelectItem key={c.id} value={c.id}>Cap {c.chapterOrder}: {c.title}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -772,8 +882,7 @@ export default function AgentModePage() {
                 onValueChange={(v) => {
                   const p = v as AIProvider;
                   setSelectedProvider(p);
-                  const first = settings?.models?.[p]?.[0] || '';
-                  setSelectedModel(first);
+                  setSelectedModel(settings?.models?.[p]?.[0] || '');
                 }}
               >
                 <SelectTrigger className="h-9 border-0 bg-transparent text-xs font-medium text-white px-1.5 focus:ring-0 gap-1 w-auto">
@@ -781,9 +890,7 @@ export default function AgentModePage() {
                 </SelectTrigger>
                 <SelectContent>
                   {availableProviders.map((p) => (
-                    <SelectItem key={p} value={p}>
-                      {PROVIDER_LABEL[p]}
-                    </SelectItem>
+                    <SelectItem key={p} value={p}>{PROVIDER_LABEL[p]}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -814,171 +921,208 @@ export default function AgentModePage() {
             </SelectTrigger>
             <SelectContent>
               {versions.map((v) => (
-                <SelectItem key={v.id} value={v.id}>
-                  v{v.versionNumber} {v.isCurrent && '· atual'}
-                </SelectItem>
+                <SelectItem key={v.id} value={v.id}>v{v.versionNumber} {v.isCurrent && '· atual'}</SelectItem>
               ))}
             </SelectContent>
           </Select>
 
-          <Button
-            variant="ghost" size="sm"
-            onClick={handleDownload}
-            className="text-gray-400 hover:text-white"
-            title="Baixar versão"
-          >
+          {/* Download */}
+          <Button variant="ghost" size="sm" onClick={handleDownload} className="text-gray-400 hover:text-white" title="Baixar versão">
             <Download className="h-4 w-4" />
           </Button>
 
+          {/* History toggle */}
           <Button
             variant="ghost" size="sm"
-            onClick={() => setShowDoc((s) => !s)}
-            className="text-gray-400 hover:text-white"
-            title={showDoc ? 'Ocultar documento' : 'Mostrar documento'}
+            onClick={() => setShowHistory((s) => !s)}
+            className={cn('gap-1.5 text-xs h-9', showHistory ? 'text-red-400 bg-red-500/10' : 'text-gray-400 hover:text-white')}
+            title={showHistory ? 'Ocultar histórico' : 'Mostrar histórico de versões'}
           >
+            <History className="h-4 w-4" />
+            {versions.length > 0 && (
+              <Badge className="bg-white/10 text-gray-300 text-[10px] px-1 h-4">{versions.length}</Badge>
+            )}
+          </Button>
+
+          {/* Toggle document panel */}
+          <Button variant="ghost" size="sm" onClick={() => setShowDoc((s) => !s)} className="text-gray-400 hover:text-white" title={showDoc ? 'Ocultar documento' : 'Mostrar documento'}>
             {showDoc ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
           </Button>
 
-          <Link href={`/chapters/${chapterId}/versions/${selectedVersionId}`}>
-            <Button variant="outline" size="sm" className="border-white/15 text-gray-300 hover:bg-white/10 text-xs h-9">
-              Modo clássico
-            </Button>
-          </Link>
+          {/* Delete chapter */}
+          <Button
+            variant="ghost" size="sm"
+            onClick={handleDelete}
+            className="text-gray-500 hover:text-red-400 hover:bg-red-500/10"
+            title="Excluir capítulo"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
-      {/* Body */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Document pane */}
-        {showDoc && (
-          <div className="w-1/2 border-r border-white/10 flex flex-col bg-gradient-to-br from-gray-950 to-black">
-            <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs text-gray-500">
-                <FileText className="h-3.5 w-3.5" />
-                <span>Documento original — v{currentVersion?.versionNumber}</span>
-                {currentVersion?.isCurrent && (
-                  <Badge className="bg-red-600 text-white text-[10px] px-1.5 py-0">Atual</Badge>
-                )}
+      {/* ── Body ─────────────────────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+        {/* Doc + Chat row */}
+        <div className="flex flex-1 overflow-hidden min-h-0">
+          {/* Document pane */}
+          {showDoc && (
+            <div className="w-1/2 border-r border-white/10 flex flex-col bg-gradient-to-br from-gray-950 to-black">
+              <div className="px-4 py-2.5 border-b border-white/10 flex items-center justify-between flex-shrink-0">
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <FileText className="h-3.5 w-3.5" />
+                  <span>v{currentVersion?.versionNumber}</span>
+                  {currentVersion?.isCurrent && (
+                    <Badge className="bg-red-600 text-white text-[10px] px-1.5 py-0">Atual</Badge>
+                  )}
+                </div>
+                <span className="text-xs text-gray-600">{docText.length.toLocaleString()} chars</span>
               </div>
-              <span className="text-xs text-gray-600">{docText.length.toLocaleString()} caracteres</span>
-            </div>
-            <ScrollArea className="flex-1">
-              <div className="p-6">
-                {loadingDoc ? (
-                  <div className="flex items-center justify-center py-20">
-                    <Loader2 className="h-6 w-6 text-red-500 animate-spin" />
-                  </div>
-                ) : docText ? (
-                  <pre className="whitespace-pre-wrap font-sans text-sm text-gray-300 leading-relaxed">
-                    {docText}
-                  </pre>
-                ) : (
-                  <p className="text-gray-500 text-sm text-center py-8">Não foi possível carregar o documento.</p>
-                )}
-              </div>
-            </ScrollArea>
-          </div>
-        )}
-
-        {/* Chat pane */}
-        <div className={cn('flex flex-col bg-gradient-to-br from-gray-950 to-gray-900', showDoc ? 'w-1/2' : 'w-full')}>
-          {/* Messages */}
-          <div ref={scrollRef} className="flex-1 overflow-y-auto">
-            <div className="max-w-3xl mx-auto px-6 py-6 space-y-5">
-              {messages.length === 0 && (
-                <WelcomeBlock onPick={(cmd) => { setInput(cmd + ' '); inputRef.current?.focus(); }} />
-              )}
-              {messages.map((msg) => (
-                <MessageBubble
-                  key={msg.id}
-                  message={msg}
-                  chapterId={chapterId}
-                  onApplyPendingEdit={(prompt) => {
-                    // Clear pending state on the bubble so the button vanishes
-                    updateMessage(msg.id, { pendingEditPrompt: undefined });
-                    setSending(true);
-                    runAdjustPipeline(prompt).finally(() => setSending(false));
-                  }}
-                  onApplied={() => {
-                    fetch(`/api/chapters/${chapterId}/versions`).then(r => r.json()).then(d => {
-                      const list = (d.versions || []).sort((a: any, b: any) => a.versionNumber - b.versionNumber);
-                      setVersions(list);
-                      const newest = list[list.length - 1];
-                      if (newest) setSelectedVersionId(newest.id);
-                    });
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Slash autocomplete */}
-          {filteredCommands.length > 0 && (
-            <div className="border-t border-white/10 bg-black/60 backdrop-blur">
-              <div className="max-w-3xl mx-auto px-6 py-2 space-y-0.5">
-                {filteredCommands.map((c) => (
-                  <button
-                    key={c.name}
-                    onClick={() => { setInput(c.name + ' '); inputRef.current?.focus(); }}
-                    className="w-full flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-white/5 text-left text-sm"
-                  >
-                    <span className={cn('flex-shrink-0', c.color)}>{c.icon}</span>
-                    <span className="font-mono text-white">{c.name}</span>
-                    <span className="text-gray-500 text-xs">{c.args}</span>
-                    <span className="text-gray-500 text-xs ml-auto truncate">{c.description}</span>
-                  </button>
-                ))}
-              </div>
+              <ScrollArea className="flex-1">
+                <div className="p-6">
+                  {loadingDoc ? (
+                    <div className="flex items-center justify-center py-20">
+                      <Loader2 className="h-6 w-6 text-red-500 animate-spin" />
+                    </div>
+                  ) : docText ? (
+                    <pre className="whitespace-pre-wrap font-sans text-sm text-gray-300 leading-relaxed">{docText}</pre>
+                  ) : (
+                    <p className="text-gray-500 text-sm text-center py-8">Não foi possível carregar o documento.</p>
+                  )}
+                </div>
+              </ScrollArea>
             </div>
           )}
 
-          {/* Input */}
-          <div className="border-t border-white/10 bg-black/40 backdrop-blur-xl px-6 py-4">
-            <div className="max-w-3xl mx-auto">
-              <div className="relative flex items-end gap-2 bg-white/[0.04] border border-white/15 rounded-2xl px-3 py-2 focus-within:border-red-500/40 transition-colors">
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Pergunte algo sobre o documento, ou use /ajustar, /traduzir, /adaptar..."
-                  rows={1}
-                  disabled={sending}
-                  className="flex-1 bg-transparent text-white placeholder:text-gray-600 text-sm resize-none outline-none py-1.5 max-h-32"
-                />
-                <Button
-                  size="sm"
-                  onClick={() => handleCommand(input)}
-                  disabled={sending || !input.trim()}
-                  className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white h-8 w-8 p-0 rounded-lg flex-shrink-0"
-                >
-                  {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                </Button>
+          {/* Chat pane */}
+          <div className={cn('flex flex-col bg-gradient-to-br from-gray-950 to-gray-900 min-h-0', showDoc ? 'w-1/2' : 'w-full')}>
+            <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0">
+              <div className="max-w-3xl mx-auto px-6 py-6 space-y-5">
+                {messages.length === 0 && (
+                  <WelcomeBlock onPick={(cmd) => { setInput(cmd + ' '); inputRef.current?.focus(); }} />
+                )}
+                {messages.map((msg) => (
+                  <MessageBubble
+                    key={msg.id}
+                    message={msg}
+                    chapterId={chapterId}
+                    onApplyPendingEdit={(prompt) => {
+                      updateMessage(msg.id, { pendingEditPrompt: undefined });
+                      setSending(true);
+                      runAdjustPipeline(prompt).finally(() => setSending(false));
+                    }}
+                    onApplied={async () => {
+                      const fresh = await refreshVersions();
+                      const newest = fresh[fresh.length - 1];
+                      if (newest) setSelectedVersionId(newest.id);
+                    }}
+                  />
+                ))}
               </div>
-              <div className="flex items-center justify-between mt-2 px-1">
-                <button
-                  onClick={() => setShowCommandHelp((s) => !s)}
-                  className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1.5"
-                >
-                  <Sparkles className="h-3 w-3" />
-                  Comandos disponíveis
-                </button>
-                <span className="text-xs text-gray-600">Enter para enviar · Shift+Enter para quebra de linha</span>
-              </div>
-              {showCommandHelp && (
-                <div className="mt-3 p-3 bg-white/[0.03] border border-white/10 rounded-lg space-y-1.5">
-                  {COMMANDS.map((c) => (
-                    <div key={c.name} className="flex items-center gap-2 text-xs">
+            </div>
+
+            {/* Slash autocomplete */}
+            {filteredCommands.length > 0 && (
+              <div className="border-t border-white/10 bg-black/60 backdrop-blur flex-shrink-0">
+                <div className="max-w-3xl mx-auto px-6 py-2 space-y-0.5">
+                  {filteredCommands.map((c) => (
+                    <button
+                      key={c.name}
+                      onClick={() => { setInput(c.name + ' '); inputRef.current?.focus(); }}
+                      className="w-full flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-white/5 text-left text-sm"
+                    >
                       <span className={cn('flex-shrink-0', c.color)}>{c.icon}</span>
-                      <code className="text-white font-mono">{c.example}</code>
-                      <span className="text-gray-500 ml-auto">{c.description}</span>
-                    </div>
+                      <span className="font-mono text-white">{c.name}</span>
+                      <span className="text-gray-500 text-xs">{c.args}</span>
+                      <span className="text-gray-500 text-xs ml-auto truncate">{c.description}</span>
+                    </button>
                   ))}
                 </div>
-              )}
+              </div>
+            )}
+
+            {/* Input */}
+            <div className="border-t border-white/10 bg-black/40 backdrop-blur-xl px-6 py-4 flex-shrink-0">
+              <div className="max-w-3xl mx-auto">
+                <div className="relative flex items-end gap-2 bg-white/[0.04] border border-white/15 rounded-2xl px-3 py-2 focus-within:border-red-500/40 transition-colors">
+                  <textarea
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Pergunte algo, ou use /ajustar, /traduzir, /adaptar, /todos..."
+                    rows={1}
+                    disabled={sending}
+                    className="flex-1 bg-transparent text-white placeholder:text-gray-600 text-sm resize-none outline-none py-1.5 max-h-32"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => handleCommand(input)}
+                    disabled={sending || !input.trim()}
+                    className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white h-8 w-8 p-0 rounded-lg flex-shrink-0"
+                  >
+                    {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  </Button>
+                </div>
+                <div className="flex items-center justify-between mt-2 px-1">
+                  <button
+                    onClick={() => setShowCommandHelp((s) => !s)}
+                    className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1.5"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    Comandos disponíveis
+                  </button>
+                  <span className="text-xs text-gray-600">Enter para enviar · Shift+Enter nova linha</span>
+                </div>
+                {showCommandHelp && (
+                  <div className="mt-3 p-3 bg-white/[0.03] border border-white/10 rounded-lg space-y-1.5">
+                    {COMMANDS.map((c) => (
+                      <div key={c.name} className="flex items-center gap-2 text-xs">
+                        <span className={cn('flex-shrink-0', c.color)}>{c.icon}</span>
+                        <code className="text-white font-mono">{c.example}</code>
+                        <span className="text-gray-500 ml-auto">{c.description}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
+
+        {/* ── History panel ───────────────────────────────────────────────────── */}
+        {showHistory && (
+          <div className="flex-shrink-0 border-t border-white/10 bg-black/30 backdrop-blur" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between px-6 py-2 border-b border-white/10 sticky top-0 bg-black/60 backdrop-blur z-10">
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <History className="h-3.5 w-3.5 text-red-400" />
+                <span className="font-medium text-white">Histórico de Versões</span>
+                <Badge className="bg-white/10 text-gray-400 text-[10px] px-1.5">{versions.length}</Badge>
+              </div>
+              <Button
+                variant="ghost" size="sm"
+                onClick={() => setShowHistory(false)}
+                className="h-6 w-6 p-0 text-gray-500 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            <div className="px-4 py-3">
+              <VersionHistory
+                versions={versions}
+                chapterId={chapterId}
+                showHeader={false}
+                onVersionDeleted={async (deletedId) => {
+                  const fresh = await refreshVersions();
+                  if (selectedVersionId === deletedId) {
+                    const newest = fresh[fresh.length - 1];
+                    if (newest) setSelectedVersionId(newest.id);
+                  }
+                }}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Diff dialog */}
@@ -999,6 +1143,8 @@ export default function AgentModePage() {
   );
 }
 
+// ─── WelcomeBlock ─────────────────────────────────────────────────────────────
+
 function WelcomeBlock({ onPick }: { onPick: (cmd: string) => void }) {
   return (
     <div className="text-center py-8 space-y-5">
@@ -1008,18 +1154,18 @@ function WelcomeBlock({ onPick }: { onPick: (cmd: string) => void }) {
       <div>
         <h2 className="text-xl font-semibold text-white mb-1">Como posso ajudar com este capítulo?</h2>
         <p className="text-sm text-gray-400 max-w-md mx-auto leading-relaxed">
-          Faça uma <strong className="text-cyan-400">pergunta</strong> sobre o documento (eu respondo aqui sem mexer no texto)
-          ou use um <code className="text-red-400">/comando</code> para <strong className="text-red-400">editar</strong> e gerar uma nova versão.
+          Faça uma <strong className="text-cyan-400">pergunta</strong> ou use um <code className="text-red-400">/comando</code> para editar e gerar uma nova versão.
+          Use <code className="text-green-400">/todos</code> para executar a sequência completa automaticamente.
         </p>
       </div>
       <div className="grid grid-cols-2 gap-2 max-w-lg mx-auto">
-        {COMMANDS.slice(0, 4).map((c) => (
+        {COMMANDS.slice(0, 6).map((c) => (
           <button
             key={c.name}
             onClick={() => onPick(c.name)}
             className="flex items-start gap-3 p-3 rounded-lg border border-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:border-white/20 transition text-left"
           >
-            <div className={cn('p-1.5 rounded-md bg-white/5', c.color)}>{c.icon}</div>
+            <div className={cn('p-1.5 rounded-md bg-white/5 flex-shrink-0', c.color)}>{c.icon}</div>
             <div className="min-w-0">
               <p className="text-sm font-medium text-white">{c.name}</p>
               <p className="text-xs text-gray-500 line-clamp-2 leading-relaxed">{c.description}</p>
@@ -1030,6 +1176,8 @@ function WelcomeBlock({ onPick }: { onPick: (cmd: string) => void }) {
     </div>
   );
 }
+
+// ─── MessageBubble ────────────────────────────────────────────────────────────
 
 function MessageBubble({
   message, chapterId, onApplied, onApplyPendingEdit,
@@ -1047,6 +1195,8 @@ function MessageBubble({
       setApplying(true);
       const res = await fetch(`/api/chapters/${chapterId}/operations/${message.jobId}/apply`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ acceptedSuggestionIds: [] }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1083,7 +1233,6 @@ function MessageBubble({
     );
   }
 
-  // assistant
   const isErrorMsg = message.status === 'error';
   const errorInfo = isErrorMsg ? classifyAIError(message.content) : null;
   const isAIError = errorInfo && errorInfo.kind !== 'unknown';
@@ -1118,13 +1267,13 @@ function MessageBubble({
               Processando...
             </div>
             <p className="text-[11px] text-gray-600 leading-relaxed">
-              Pode sair desta página — a operação continua no servidor. Veja o status em <strong className="text-gray-500">Operações</strong> no topo.
+              Pode sair desta página — a operação continua no servidor.
             </p>
             {message.jobId && (
               <button
                 onClick={async (e) => {
                   e.preventDefault();
-                  if (!confirm('Cancelar esta operação? A IA para na próxima chamada — você economiza créditos a partir daí.')) return;
+                  if (!confirm('Cancelar esta operação?')) return;
                   await cancelJobRequest(message.jobId!, 'chapter-operation');
                 }}
                 className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-red-400 transition-colors"
@@ -1136,7 +1285,7 @@ function MessageBubble({
           </div>
         )}
 
-        {message.status === 'success' && message.jobId && message.command && message.command !== '/diff' && message.command !== '/revisar' && (
+        {message.status === 'success' && message.jobId && message.command && message.command !== '/diff' && message.command !== '/revisar' && message.command !== '/todos' && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
@@ -1144,19 +1293,19 @@ function MessageBubble({
               disabled={applying}
               className="h-7 text-xs bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800"
             >
-              {applying ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Aplicando...</> : <><CheckCircle2 className="h-3 w-3 mr-1" />Aplicar como nova versão</>}
+              {applying ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Aplicando...</> : <><CheckCircle2 className="h-3 w-3 mr-1" />Aplicar como versão</>}
             </Button>
             {(() => {
               const routeMap: Record<string, string> = {
-                '/traduzir': 'translate',
-                '/adaptar': 'adapt',
-                '/ajustar': 'adjust',
+                '/traduzir': 'translate', '/adaptar': 'adapt', '/ajustar': 'adjust',
               };
               const route = routeMap[message.command!];
               if (!route) return null;
               return (
                 <Link
                   href={`/chapters/${chapterId}/${route}/${message.jobId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="text-xs text-gray-400 hover:text-white underline-offset-2 hover:underline"
                 >
                   Ver detalhes
