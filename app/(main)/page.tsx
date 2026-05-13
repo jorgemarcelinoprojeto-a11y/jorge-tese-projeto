@@ -7,8 +7,9 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ImportDocumentDialog } from '@/components/import-document-dialog';
-import { FileText, Sparkles, BookOpen, GraduationCap, Search, Upload, Folder } from 'lucide-react';
+import { FileText, Sparkles, BookOpen, GraduationCap, Search, Upload, Folder, Trash2 } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
 type Project = {
@@ -228,13 +229,15 @@ export default function HomePage() {
                     {filteredTheses.map((thesis, index) => (
                       <DocumentCard
                         key={thesis.id}
+                        id={thesis.id}
+                        type="thesis"
                         href={`/theses/${thesis.id}/agent`}
-                        secondaryHref={`/theses/${thesis.id}`}
                         icon={<GraduationCap className="h-6 w-6 text-red-500" />}
                         title={thesis.title}
                         description={thesis.description}
                         badge={`${thesis.chapterCount} ${thesis.chapterCount === 1 ? 'capítulo' : 'capítulos'}`}
                         index={index}
+                        onDeleted={loadAll}
                       />
                     ))}
                   </div>
@@ -262,13 +265,15 @@ export default function HomePage() {
                     {filteredProjects.map((project, index) => (
                       <DocumentCard
                         key={project.id}
+                        id={project.id}
+                        type="project"
                         href={`/projects/${project.id}/agent`}
-                        secondaryHref={`/projects/${project.id}`}
                         icon={<Folder className="h-6 w-6 text-red-500" />}
                         title={project.name}
                         description={project.description}
                         badge={`${project.documentCount} ${project.documentCount === 1 ? 'doc' : 'docs'}`}
                         index={index}
+                        onDeleted={loadAll}
                       />
                     ))}
                   </div>
@@ -296,22 +301,53 @@ export default function HomePage() {
 }
 
 function DocumentCard({
+  id,
+  type,
   href,
-  secondaryHref,
   icon,
   title,
   description,
   badge,
   index,
+  onDeleted,
 }: {
+  id: string;
+  type: 'thesis' | 'project';
   href: string;
-  secondaryHref?: string;
   icon: React.ReactNode;
   title: string;
   description?: string;
   badge: string;
   index: number;
+  onDeleted?: () => void;
 }) {
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const label = type === 'thesis' ? 'tese' : 'projeto';
+    const confirmed = window.confirm(
+      `Excluir permanentemente ${label === 'tese' ? 'a' : 'o'} ${label} "${title}"?\n\nTodos os dados serão removidos. Esta ação não pode ser desfeita.`
+    );
+    if (!confirmed) return;
+    try {
+      setDeleting(true);
+      const endpoint = type === 'thesis' ? `/api/theses/${id}` : `/api/projects/${id}`;
+      const res = await fetch(endpoint, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Falha ao excluir');
+      }
+      toast.success(`${type === 'thesis' ? 'Tese' : 'Projeto'} excluído com sucesso.`);
+      onDeleted?.();
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao excluir');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div
       className="group relative"
@@ -342,15 +378,19 @@ function DocumentCard({
           </Card>
         </div>
       </Link>
-      {secondaryHref && (
-        <Link
-          href={secondaryHref}
-          className="absolute bottom-3 right-3 z-10 text-[10px] text-gray-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity bg-black/40 backdrop-blur-sm px-2 py-1 rounded-md border border-white/10"
-          onClick={(e) => e.stopPropagation()}
-        >
-          Modo clássico
-        </Link>
-      )}
+
+      {/* Trash icon — appears on hover, top-right corner */}
+      <button
+        onClick={handleDelete}
+        disabled={deleting}
+        className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md bg-black/50 backdrop-blur-sm border border-white/10 text-gray-500 hover:text-red-400 hover:border-red-500/30 hover:bg-red-500/10 disabled:opacity-50"
+        title={`Excluir ${type === 'thesis' ? 'tese' : 'projeto'}`}
+      >
+        {deleting
+          ? <span className="block h-3.5 w-3.5 border border-gray-500 border-t-transparent rounded-full animate-spin" />
+          : <Trash2 className="h-3.5 w-3.5" />
+        }
+      </button>
     </div>
   );
 }

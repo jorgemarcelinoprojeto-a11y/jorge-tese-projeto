@@ -85,14 +85,14 @@ type SlashCommand = {
 };
 
 const COMMANDS: SlashCommand[] = [
-  { name: '/perguntar', args: '<pergunta>',   example: '/perguntar qual o tema deste capítulo',  description: 'Pergunte algo sobre o documento — sem gerar versão',    icon: <Bot            className="h-4 w-4" />, color: 'text-cyan-400' },
-  { name: '/traduzir',  args: '<idioma>',     example: '/traduzir inglês',                       description: 'Traduz a versão atual para outro idioma',                icon: <Languages      className="h-4 w-4" />, color: 'text-purple-400' },
-  { name: '/adaptar',   args: '<estilo>',     example: '/adaptar simplificado',                  description: 'Adapta o tom (academic, professional, simplified)',      icon: <Wand2          className="h-4 w-4" />, color: 'text-pink-400' },
-  { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',          description: 'Aplica uma edição: IA cria uma nova versão',             icon: <Sliders        className="h-4 w-4" />, color: 'text-orange-400' },
-  { name: '/revisar',   args: '',             example: '/revisar',                               description: 'Verifica se leis citadas continuam vigentes',            icon: <SearchCheck    className="h-4 w-4" />, color: 'text-yellow-400' },
-  { name: '/diff',      args: '[v1] [v2]',    example: '/diff 1 atual',                          description: 'Compara duas versões (padrão: original vs atual)',       icon: <ArrowLeftRight className="h-4 w-4" />, color: 'text-blue-400' },
-  { name: '/todos',     args: '',             example: '/todos',                                 description: 'Executa: ajuste erudito → revisão de leis → tradução pt', icon: <PlayCircle    className="h-4 w-4" />, color: 'text-green-400' },
-  { name: '/limpar',    args: '',             example: '/limpar',                                description: 'Limpa a conversa',                                        icon: <Trash2        className="h-4 w-4" />, color: 'text-gray-400' },
+  { name: '/perguntar', args: '<pergunta>',   example: '/perguntar qual o tema deste capítulo',  description: 'Pergunte algo sobre o documento — sem gerar versão',      icon: <Bot            className="h-4 w-4" />, color: 'text-cyan-400' },
+  { name: '/traduzir',  args: '<idioma>',     example: '/traduzir inglês',                       description: 'Traduz a versão atual para outro idioma',                  icon: <Languages      className="h-4 w-4" />, color: 'text-purple-400' },
+  { name: '/adaptar',   args: '<estilo>',     example: '/adaptar simplificado',                  description: 'Adapta o tom (acadêmico, profissional, simplificado)',     icon: <Wand2          className="h-4 w-4" />, color: 'text-pink-400' },
+  { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',          description: 'Aplica uma edição: IA cria uma nova versão',               icon: <Sliders        className="h-4 w-4" />, color: 'text-orange-400' },
+  { name: '/revisar',   args: '',             example: '/revisar',                               description: 'Verifica se leis citadas continuam vigentes',              icon: <SearchCheck    className="h-4 w-4" />, color: 'text-yellow-400' },
+  { name: '/comparar',  args: '[v1] [v2]',    example: '/comparar 1 atual',                      description: 'Compara duas versões (padrão: original vs atual)',         icon: <ArrowLeftRight className="h-4 w-4" />, color: 'text-blue-400' },
+  { name: '/todos',     args: '',             example: '/todos',                                 description: 'Executa em sequência: traduzir pt → adaptar simplificado → revisar leis', icon: <PlayCircle className="h-4 w-4" />, color: 'text-green-400' },
+  { name: '/limpar',    args: '',             example: '/limpar',                                description: 'Limpa a conversa',                                         icon: <Trash2        className="h-4 w-4" />, color: 'text-gray-400' },
 ];
 
 const LANGUAGE_MAP: Record<string, string> = {
@@ -454,10 +454,10 @@ export default function AgentModePage() {
   };
 
   /**
-   * /todos — Executes 3 operations in sequence:
-   *   1. /ajustar texto mais erudito
-   *   2. /revisar leis
-   *   3. /traduzir para o português
+   * /todos — Executes 3 operations in sequence, each creating its own new version:
+   *   1. /traduzir português
+   *   2. /adaptar simplificado
+   *   3. /revisar leis
    */
   const runTodosPipeline = async () => {
     if (!selectedVersionId) {
@@ -474,86 +474,20 @@ export default function AgentModePage() {
 
     appendMessage({
       role: 'system',
-      content: '/todos — Iniciando sequência automática: (1) Ajuste erudito → (2) Revisão de leis → (3) Tradução para português',
+      content: '/todos — Sequência automática iniciada:\n/traduzir português → /adaptar simplificado → /revisar leis',
     });
 
-    // ── Passo 1: Ajustar para linguagem mais erudita ──────────────────────────
+    // ── Passo 1: Traduzir para português ────────────────────────────────────
     const asstId1 = appendMessage({
       role: 'assistant',
-      content: 'Passo 1/3 — Ajustando para linguagem mais erudita e acadêmica...',
+      content: 'Passo 1/3 — Traduzindo para o português...',
       status: 'running',
       command: '/todos',
       aiProvider: ai.provider,
       aiModel: ai.model,
     });
     try {
-      const res1 = await fetch(`/api/chapters/${chapterId}/adjust`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          versionId: workingVersionId,
-          instructions: 'Reescreva o texto em linguagem mais erudita, acadêmica e sofisticada, usando vocabulário formal e construções elaboradas, mantendo todas as informações, citações e referências originais intactas.',
-          creativity: 4,
-          provider: ai.provider, model: ai.model,
-          useGrounding: false, references: [], contextVersionIds: [],
-        }),
-      });
-      if (!res1.ok) {
-        const err = await res1.json().catch(() => ({}));
-        updateMessage(asstId1, { status: 'error', content: `Passo 1 falhou: ${err.error || 'Erro desconhecido'}` });
-        return;
-      }
-      const { jobId: jobId1 } = await res1.json();
-      updateMessage(asstId1, { jobId: jobId1 });
-      const newVId1 = await pollJob(jobId1, asstId1, 'Passo 1/3 — Ajuste erudito', { silent: true });
-      if (newVId1) workingVersionId = newVId1;
-      // If pollJob returned null due to error, continue anyway (best-effort)
-    } catch (e: any) {
-      updateMessage(asstId1, { status: 'error', content: `Passo 1 falhou: ${e.message}` });
-      return;
-    }
-
-    // ── Passo 2: Revisar leis ────────────────────────────────────────────────
-    const asstId2 = appendMessage({
-      role: 'assistant',
-      content: 'Passo 2/3 — Verificando vigência das leis e normas citadas...',
-      status: 'running',
-      command: '/todos',
-      aiProvider: ai.provider,
-      aiModel: ai.model,
-    });
-    try {
-      const res2 = await fetch(`/api/chapters/${chapterId}/versions/${workingVersionId}/norms-update`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: ai.provider, model: ai.model }),
-      });
-      if (!res2.ok) {
-        const err = await res2.json().catch(() => ({}));
-        updateMessage(asstId2, { status: 'error', content: `Passo 2 falhou: ${err.error || 'Erro'}` });
-      } else {
-        const { jobId: jobId2 } = await res2.json();
-        updateMessage(asstId2, {
-          status: 'success',
-          jobId: jobId2,
-          content: 'Passo 2/3 — Revisão de normas iniciada em segundo plano. Prosseguindo para tradução...',
-        });
-      }
-    } catch (e: any) {
-      updateMessage(asstId2, { status: 'error', content: `Passo 2 falhou: ${e.message}` });
-    }
-
-    // ── Passo 3: Traduzir para português ─────────────────────────────────────
-    const asstId3 = appendMessage({
-      role: 'assistant',
-      content: 'Passo 3/3 — Traduzindo para o português...',
-      status: 'running',
-      command: '/todos',
-      aiProvider: ai.provider,
-      aiModel: ai.model,
-    });
-    try {
-      const res3 = await fetch(`/api/chapters/${chapterId}/translate`, {
+      const res1 = await fetch(`/api/chapters/${chapterId}/translate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -563,17 +497,82 @@ export default function AgentModePage() {
           references: [],
         }),
       });
+      if (!res1.ok) {
+        const err = await res1.json().catch(() => ({}));
+        updateMessage(asstId1, { status: 'error', content: `Passo 1 falhou: ${err.error || 'Erro'}` });
+        return;
+      }
+      const { jobId: jobId1 } = await res1.json();
+      updateMessage(asstId1, { jobId: jobId1 });
+      const newVId1 = await pollJob(jobId1, asstId1, 'Passo 1/3 — Tradução para português', { silent: true });
+      if (newVId1) workingVersionId = newVId1;
+    } catch (e: any) {
+      updateMessage(asstId1, { status: 'error', content: `Passo 1 falhou: ${e.message}` });
+      return;
+    }
+
+    // ── Passo 2: Adaptar para estilo simplificado ────────────────────────────
+    const asstId2 = appendMessage({
+      role: 'assistant',
+      content: 'Passo 2/3 — Adaptando para estilo simplificado...',
+      status: 'running',
+      command: '/todos',
+      aiProvider: ai.provider,
+      aiModel: ai.model,
+    });
+    try {
+      const res2 = await fetch(`/api/chapters/${chapterId}/adapt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          versionId: workingVersionId,
+          style: 'simplified',
+          provider: ai.provider, model: ai.model,
+          references: [], contextVersionIds: [],
+        }),
+      });
+      if (!res2.ok) {
+        const err = await res2.json().catch(() => ({}));
+        updateMessage(asstId2, { status: 'error', content: `Passo 2 falhou: ${err.error || 'Erro'}` });
+        return;
+      }
+      const { jobId: jobId2 } = await res2.json();
+      updateMessage(asstId2, { jobId: jobId2 });
+      const newVId2 = await pollJob(jobId2, asstId2, 'Passo 2/3 — Adaptação simplificada', { silent: true });
+      if (newVId2) workingVersionId = newVId2;
+    } catch (e: any) {
+      updateMessage(asstId2, { status: 'error', content: `Passo 2 falhou: ${e.message}` });
+      return;
+    }
+
+    // ── Passo 3: Revisar leis ────────────────────────────────────────────────
+    const asstId3 = appendMessage({
+      role: 'assistant',
+      content: 'Passo 3/3 — Verificando vigência das leis e normas citadas...',
+      status: 'running',
+      command: '/todos',
+      aiProvider: ai.provider,
+      aiModel: ai.model,
+    });
+    try {
+      const res3 = await fetch(`/api/chapters/${chapterId}/versions/${workingVersionId}/norms-update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: ai.provider, model: ai.model }),
+      });
       if (!res3.ok) {
         const err = await res3.json().catch(() => ({}));
         updateMessage(asstId3, { status: 'error', content: `Passo 3 falhou: ${err.error || 'Erro'}` });
-        return;
+      } else {
+        const { jobId: jobId3 } = await res3.json();
+        updateMessage(asstId3, {
+          status: 'success',
+          jobId: jobId3,
+          content: 'Passo 3/3 — Revisão de normas iniciada em segundo plano.',
+        });
       }
-      const { jobId: jobId3 } = await res3.json();
-      updateMessage(asstId3, { jobId: jobId3 });
-      await pollJob(jobId3, asstId3, 'Passo 3/3 — Tradução para português', { silent: true });
     } catch (e: any) {
       updateMessage(asstId3, { status: 'error', content: `Passo 3 falhou: ${e.message}` });
-      return;
     }
 
     appendMessage({
@@ -581,7 +580,7 @@ export default function AgentModePage() {
       content: '/todos concluído! As novas versões estão disponíveis no histórico abaixo.',
     });
     toast.success('/todos concluído!', {
-      description: 'Sequência completa: ajuste erudito + revisão de leis + tradução para português.',
+      description: 'Sequência completa: tradução pt + adaptação simplificada + revisão de leis.',
       duration: 7000,
     });
     setShowHistory(true);
@@ -687,7 +686,7 @@ export default function AgentModePage() {
           return;
         }
 
-        case '/diff': {
+        case '/comparar': {
           const parts = args.split(/\s+/).filter(Boolean);
           let leftV = originalVersion;
           let rightV = currentVersion;
@@ -1075,13 +1074,22 @@ export default function AgentModePage() {
                   <span className="text-xs text-gray-600">Enter para enviar · Shift+Enter nova linha</span>
                 </div>
                 {showCommandHelp && (
-                  <div className="mt-3 p-3 bg-white/[0.03] border border-white/10 rounded-lg space-y-1.5">
+                  <div className="mt-3 p-3 bg-white/[0.03] border border-white/10 rounded-lg space-y-0.5">
                     {COMMANDS.map((c) => (
-                      <div key={c.name} className="flex items-center gap-2 text-xs">
+                      <button
+                        key={c.name}
+                        type="button"
+                        onClick={() => {
+                          setInput(c.name + ' ');
+                          setShowCommandHelp(false);
+                          inputRef.current?.focus();
+                        }}
+                        className="w-full flex items-center gap-2 text-xs px-2 py-1.5 rounded-md hover:bg-white/[0.06] hover:border-white/10 transition text-left"
+                      >
                         <span className={cn('flex-shrink-0', c.color)}>{c.icon}</span>
                         <code className="text-white font-mono">{c.example}</code>
-                        <span className="text-gray-500 ml-auto">{c.description}</span>
-                      </div>
+                        <span className="text-gray-500 ml-auto truncate">{c.description}</span>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -1159,7 +1167,7 @@ function WelcomeBlock({ onPick }: { onPick: (cmd: string) => void }) {
         </p>
       </div>
       <div className="grid grid-cols-2 gap-2 max-w-lg mx-auto">
-        {COMMANDS.slice(0, 6).map((c) => (
+        {COMMANDS.filter(c => c.name !== '/limpar').map((c) => (
           <button
             key={c.name}
             onClick={() => onPick(c.name)}
@@ -1285,7 +1293,7 @@ function MessageBubble({
           </div>
         )}
 
-        {message.status === 'success' && message.jobId && message.command && message.command !== '/diff' && message.command !== '/revisar' && message.command !== '/todos' && (
+        {message.status === 'success' && message.jobId && message.command && message.command !== '/comparar' && message.command !== '/revisar' && message.command !== '/todos' && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
