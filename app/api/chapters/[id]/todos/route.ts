@@ -106,7 +106,12 @@ async function runTodos(
         'update',
         { autoAppliedBy: '/todos' }
       );
-      await updateOperationJob(norms.jobId, { newVersionId: normsVersionId });
+      await updateOperationJob(norms.jobId, {
+        status: 'completed',
+        progress: 100,
+        newVersionId: normsVersionId,
+        completedAt: new Date().toISOString(),
+      });
     }
   } finally {
     await Promise.all(tempPaths.map((p) => fs.unlink(p).catch(() => {})));
@@ -271,13 +276,8 @@ async function runNormsStep(
 
     if (references.length === 0) {
       await markNormsCompleted(jobId, []);
-      await updateOperationJob(operationJobId, {
-        status: 'completed',
-        progress: 100,
-        completedAt: new Date().toISOString(),
-      });
-      await fs.unlink(inputPath).catch(() => {});
-      return { outputPath: null, jobId: operationJobId };
+      await fs.copyFile(inputPath, outputPath);
+      return { outputPath, jobId: operationJobId };
     }
 
     const verifiedReferences = await verifyMultipleNorms(
@@ -304,21 +304,11 @@ async function runNormsStep(
 
     const referencesToApply = verifiedReferences.filter((r: NormReference) => r.suggestedText);
     if (referencesToApply.length === 0) {
-      await updateOperationJob(operationJobId, {
-        status: 'completed',
-        progress: 100,
-        completedAt: new Date().toISOString(),
-      });
-      await fs.unlink(inputPath).catch(() => {});
-      return { outputPath: null, jobId: operationJobId };
+      await fs.copyFile(inputPath, outputPath);
+      return { outputPath, jobId: operationJobId };
     }
 
     await applyNormUpdatesToDocx(inputPath, outputPath, referencesToApply);
-    await updateOperationJob(operationJobId, {
-      status: 'completed',
-      progress: 100,
-      completedAt: new Date().toISOString(),
-    });
     return { outputPath, jobId: operationJobId };
   } catch (error: any) {
     await supabase
