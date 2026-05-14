@@ -4,6 +4,7 @@
  */
 
 import { AdjustSuggestion } from './types';
+import { parseJsonWithLlmRepair } from './parse-llm-json';
 import { extractDocumentStructure } from '@/lib/improvement/document-analyzer';
 import { isGemini429, parseGeminiRetryDelayMs, sleep } from '@/lib/ai/gemini-retry';
 import { isOpenAIGpt5Family } from '@/lib/ai/openai-compat';
@@ -161,17 +162,11 @@ async function analyzeBatch(
     if (lastError) throw lastError;
   }
 
-  // Parse response
+  // Parse response (Gemini sometimes puts literal tabs/newlines inside JSON strings)
   try {
-    // Strip markdown code blocks if present (happens with grounding)
-    let jsonText = responseText.trim();
-    if (jsonText.startsWith('```json')) {
-      jsonText = jsonText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-    } else if (jsonText.startsWith('```')) {
-      jsonText = jsonText.replace(/^```\s*/, '').replace(/\s*```$/, '');
-    }
-
-    const parsed = JSON.parse(jsonText);
+    const parsed = parseJsonWithLlmRepair(responseText) as {
+      adjustments?: Array<Record<string, unknown>>;
+    };
     const suggestions: AdjustSuggestion[] = (parsed.adjustments || []).map((adj: any) => ({
       id: `adj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       paragraphIndex: adj.paragraphIndex || 0,
@@ -238,6 +233,7 @@ Return your response as JSON in this exact format:
 }
 
 CRITICAL RULES:
+- Output must be valid JSON: inside string values, never use raw line breaks or tab characters; use \\n and \\t instead
 - ONLY make changes that directly address the user's instructions
 - Do NOT improve clarity, grammar, style, or anything else unless explicitly instructed to do so
 - Only include paragraphs that need adjustment to fulfill the instructions
