@@ -695,11 +695,6 @@ export default function ProjectAgentPage() {
             {showDoc ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
           </Button>
 
-          <Link href={`/projects/${projectId}`}>
-            <Button variant="outline" size="sm" className="border-white/15 text-gray-300 hover:bg-white/10 text-xs h-9">
-              Modo clássico
-            </Button>
-          </Link>
         </div>
       </div>
 
