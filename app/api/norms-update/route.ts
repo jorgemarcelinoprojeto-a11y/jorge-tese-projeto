@@ -126,7 +126,7 @@ async function processNormsUpdate(
       }
 
       const tempDir = os.tmpdir();
-      tempFilePath = path.join(tempDir, `${doc.id}_norms.docx`);
+      tempFilePath = path.join(tempDir, `${jobId}_${doc.id}_norms.docx`);
       const buffer = Buffer.from(await fileBlob.arrayBuffer());
       await fs.writeFile(tempFilePath, buffer);
     }

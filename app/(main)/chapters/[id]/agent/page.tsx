@@ -311,7 +311,7 @@ export default function AgentModePage() {
 
   const pollJob = async (jobId: string, asstId: string, opLabel: string) => {
     const start = Date.now();
-    const TIMEOUT_MS = 5 * 60 * 1000;
+    const TIMEOUT_MS = 20 * 60 * 1000;
 
     while (Date.now() - start < TIMEOUT_MS) {
       await new Promise((r) => setTimeout(r, 2500));
@@ -369,8 +369,9 @@ export default function AgentModePage() {
     }
 
     updateMessage(asstId, {
-      status: 'error',
-      content: 'Tempo esgotado aguardando o resultado. Verifique a página de versões para ver o status.',
+      status: 'running',
+      content: `${opLabel} ainda está em andamento no servidor. Acompanhe pelo botão Operações no topo ou pelo histórico de versões.`,
+      jobId,
     });
   };
 

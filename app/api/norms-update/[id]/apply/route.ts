@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import JSZip from 'jszip';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import { NormReference } from '@/lib/norms-update/types';
+import { applyNormUpdatesToDocx } from '@/lib/norms-update/apply-docx';
 
 // POST /api/norms-update/[id]/apply - Aplica atualizações aceitas
 export async function POST(
@@ -162,8 +162,8 @@ export async function POST(
     }
 
     const tempDir = os.tmpdir();
-    const tempInputPath = path.join(tempDir, `${job.document_id}_original.docx`);
-    const tempOutputPath = path.join(tempDir, `${job.document_id}_updated.docx`);
+    const tempInputPath = path.join(tempDir, `${jobId}_${job.document_id}_original.docx`);
+    const tempOutputPath = path.join(tempDir, `${jobId}_${job.document_id}_updated.docx`);
 
     const buffer = Buffer.from(await fileBlob.arrayBuffer());
     await fs.writeFile(tempInputPath, buffer);
@@ -204,67 +204,3 @@ export async function POST(
 /**
  * Aplica atualizações de normas ao documento DOCX
  */
-async function applyNormUpdatesToDocx(
-  inputPath: string,
-  outputPath: string,
-  references: NormReference[]
-): Promise<void> {
-  const data = await fs.readFile(inputPath);
-  const zip = await JSZip.loadAsync(data);
-
-  const file = zip.file('word/document.xml');
-  if (!file) throw new Error('document.xml not found');
-
-  let xmlContent = await file.async('string');
-
-  // Normaliza o XML inteiro primeiro
-  xmlContent = xmlContent.normalize('NFC');
-
-  // Ordena por índice de parágrafo (maior para menor)
-  const sortedReferences = [...references].sort((a, b) =>
-    b.paragraphIndex - a.paragraphIndex
-  );
-
-  console.log(`[NORMS-APPLY] Applying ${sortedReferences.length} updates`);
-
-  let appliedCount = 0;
-  for (const ref of sortedReferences) {
-    // Só aplica se tiver texto sugerido
-    if (!ref.suggestedText) {
-      console.warn(`[NORMS-APPLY] ⚠ No suggested text for: ${ref.fullText}`);
-      continue;
-    }
-
-    // Normaliza textos
-    const normalizedOriginal = ref.fullText.normalize('NFC');
-    const normalizedSuggested = ref.suggestedText.normalize('NFC');
-
-    // Escapa para regex
-    const escapedOriginal = normalizedOriginal
-      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-    const regex = new RegExp(escapedOriginal, 'g');
-    const matches = xmlContent.match(regex);
-
-    if (matches && matches.length > 0) {
-      // Substitui primeira ocorrência
-      xmlContent = xmlContent.replace(regex, normalizedSuggested);
-      appliedCount++;
-      console.log(`[NORMS-APPLY] ✓ Applied update ${appliedCount}/${sortedReferences.length}`);
-    } else {
-      console.warn(`[NORMS-APPLY] ⚠ Text not found: "${normalizedOriginal.substring(0, 50)}..."`);
-    }
-  }
-
-  console.log(`[NORMS-APPLY] Successfully applied ${appliedCount}/${sortedReferences.length} updates`);
-
-  // Atualiza o XML no ZIP
-  zip.file('word/document.xml', Buffer.from(xmlContent, 'utf-8'));
-
-  // Gera novo DOCX
-  const outputBuffer = await zip.generateAsync({
-    type: 'nodebuffer',
-    compression: 'DEFLATE'
-  });
-  await fs.writeFile(outputPath, outputBuffer);
-}

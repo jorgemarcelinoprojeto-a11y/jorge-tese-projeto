@@ -61,10 +61,10 @@ export async function executeTranslation(
 
   const tempDir = os.tmpdir();
   const tempInputPath =
-    sourceDocumentPath || path.join(tempDir, `${documentId}_input.docx`);
+    sourceDocumentPath || path.join(tempDir, `${jobId}_${documentId}_input.docx`);
   const tempOutputPath = path.join(
     tempDir,
-    `${documentId}_output_${targetLanguage}.docx`
+    `${jobId}_${documentId}_output_${targetLanguage}.docx`
   );
 
   try {

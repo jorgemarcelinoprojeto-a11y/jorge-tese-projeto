@@ -34,7 +34,16 @@ const AUTH_KEYWORDS = [
   'invalid_api_key',
 ];
 
-export type AIErrorKind = 'quota' | 'rate-limit' | 'auth' | 'unknown';
+const MODEL_KEYWORDS = [
+  'model not found',
+  'not found for api version',
+  'not supported for generatecontent',
+  'models/',
+  'does not exist',
+  'unsupported model',
+];
+
+export type AIErrorKind = 'quota' | 'rate-limit' | 'auth' | 'model' | 'unknown';
 
 export type AIErrorInfo = {
   kind: AIErrorKind;
@@ -102,6 +111,17 @@ export function classifyAIError(messageOrError: string | unknown): AIErrorInfo {
       kind: 'auth',
       title: `Chave de API inválida${providerLabel}`,
       message: 'A chave de API foi rejeitada pelo provedor. Verifique se está correta e ativa em Configurações.',
+      provider,
+      raw: text,
+    };
+  }
+
+  if (matchesAny(text, MODEL_KEYWORDS)) {
+    return {
+      kind: 'model',
+      title: `Modelo indisponível${providerLabel}`,
+      message: 'O modelo selecionado não está disponível para essa chave, região ou versão da API. Troque o modelo em Configurações ou selecione outro modelo no topo da página.',
+      hint: 'Para Gemini, tente gemini-2.5-flash quando um modelo preview falhar.',
       provider,
       raw: text,
     };

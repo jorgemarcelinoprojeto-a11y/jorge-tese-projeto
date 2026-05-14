@@ -82,6 +82,7 @@ const COMMANDS: SlashCommand[] = [
   { name: '/adaptar',   args: '<estilo>',     example: '/adaptar simplificado',           description: 'Adapta o tom (academic, professional, simplified)', icon: <Wand2       className="h-4 w-4" />, color: 'text-pink-400' },
   { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',   description: 'Aplica uma edição: IA cria uma nova versão',     icon: <Sliders     className="h-4 w-4" />, color: 'text-orange-400' },
   { name: '/revisar',   args: '',             example: '/revisar',                        description: 'Verifica se leis citadas continuam vigentes',     icon: <SearchCheck className="h-4 w-4" />, color: 'text-yellow-400' },
+  { name: '/todos',     args: '',             example: '/todos',                          description: 'Traduz para português, adapta e revisa normas em sequência', icon: <Sparkles className="h-4 w-4" />, color: 'text-red-400' },
   { name: '/limpar',    args: '',             example: '/limpar',                         description: 'Limpa a conversa',                                  icon: <Trash2      className="h-4 w-4" />, color: 'text-gray-400' },
 ];
 
@@ -499,6 +500,42 @@ export default function ProjectAgentPage() {
           return;
         }
 
+        case '/todos': {
+          if (!currentAI) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo.', status: 'error' }); return; }
+
+          const asstId = appendMessage({
+            role: 'assistant',
+            command: cmd,
+            status: 'running',
+            content: '/todos iniciado: traduzir português → adaptar simplificado → revisar leis. Cada etapa salva uma nova versão e a próxima usa o documento atualizado.',
+            aiProvider: currentAI.provider,
+            aiModel: currentAI.model,
+          });
+
+          const res = await fetch(`/api/documents/${selectedDocId}/todos`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              provider: currentAI.provider,
+              model: currentAI.model,
+              targetLanguage: 'pt',
+              adaptStyle: 'simplified',
+            }),
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            updateMessage(asstId, { status: 'error', content: err.error || 'Falha ao iniciar /todos' });
+            return;
+          }
+
+          updateMessage(asstId, {
+            status: 'success',
+            content: '/todos está rodando em sequência no servidor. Acompanhe as etapas em Operações; o documento do projeto será atualizado a cada versão salva.',
+          });
+          return;
+        }
+
         default:
           appendMessage({
             role: 'system',
@@ -742,7 +779,7 @@ export default function ProjectAgentPage() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Pergunte algo sobre o documento, ou use /ajustar, /traduzir, /adaptar..."
+                  placeholder="Pergunte algo sobre o documento, ou use /todos, /ajustar, /traduzir..."
                   rows={1}
                   disabled={sending}
                   className="flex-1 bg-transparent text-white placeholder:text-gray-600 text-sm resize-none outline-none py-1.5 max-h-32"
@@ -799,7 +836,7 @@ function WelcomeBlock({ onPick }: { onPick: (cmd: string) => void }) {
         </p>
       </div>
       <div className="grid grid-cols-2 gap-2 max-w-lg mx-auto">
-        {COMMANDS.slice(0, 4).map((c) => (
+        {COMMANDS.filter((c) => c.name !== '/limpar').slice(0, 5).map((c) => (
           <button
             key={c.name}
             onClick={() => onPick(c.name)}

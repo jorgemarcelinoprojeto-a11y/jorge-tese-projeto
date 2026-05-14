@@ -77,7 +77,7 @@ export async function POST(
 
     // Salva arquivo temporário
     const tempDir = os.tmpdir();
-    const sourcePath = path.join(tempDir, `${job.version_id}_source.docx`);
+    const sourcePath = path.join(tempDir, `${jobId}_${job.version_id}_source.docx`);
     const outputPath = path.join(tempDir, `${randomUUID()}_output.docx`);
     const buffer = Buffer.from(await fileBlob.arrayBuffer());
     await fs.writeFile(sourcePath, buffer);
@@ -155,8 +155,8 @@ export async function POST(
       .eq('id', jobId);
 
     // Limpa arquivos temporários
-    await fs.unlink(sourcePath);
-    await fs.unlink(outputPath);
+    await fs.unlink(sourcePath).catch(() => {});
+    await fs.unlink(outputPath).catch(() => {});
 
     console.log(`[APPLY-API] Created new version: ${newVersionId}`);
 

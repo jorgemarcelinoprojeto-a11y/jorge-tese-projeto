@@ -173,7 +173,7 @@ export async function executeImproveOperation(
     }
 
     const tempDir = os.tmpdir();
-    const sourcePath = path.join(tempDir, `${versionId}_source.docx`);
+    const sourcePath = path.join(tempDir, `${jobId}_${versionId}_source.docx`);
     const buffer = Buffer.from(await fileBlob.arrayBuffer());
     await fs.writeFile(sourcePath, buffer);
 
@@ -344,8 +344,8 @@ export async function executeTranslateOperation(
     }
 
     const tempDir = os.tmpdir();
-    const sourcePath = path.join(tempDir, `${versionId}_source.docx`);
-    const outputPath = path.join(tempDir, `${versionId}_translated.docx`);
+    const sourcePath = path.join(tempDir, `${jobId}_${versionId}_source.docx`);
+    const outputPath = path.join(tempDir, `${jobId}_${versionId}_translated.docx`);
     const buffer = Buffer.from(await fileBlob.arrayBuffer());
     await fs.writeFile(sourcePath, buffer);
 
@@ -581,7 +581,7 @@ export async function executeAdjustOperation(
     }
 
     const tempDir = os.tmpdir();
-    const sourcePath = path.join(tempDir, `${versionId}_source.docx`);
+    const sourcePath = path.join(tempDir, `${jobId}_${versionId}_source.docx`);
     const buffer = Buffer.from(await fileBlob.arrayBuffer());
     await fs.writeFile(sourcePath, buffer);
 
@@ -741,7 +741,7 @@ export async function executeAdaptOperation(
     }
 
     const tempDir = os.tmpdir();
-    const sourcePath = path.join(tempDir, `${versionId}_source.docx`);
+    const sourcePath = path.join(tempDir, `${jobId}_${versionId}_source.docx`);
     const buffer = Buffer.from(await fileBlob.arrayBuffer());
     await fs.writeFile(sourcePath, buffer);
 
@@ -904,7 +904,7 @@ export async function executeUpdateOperation(
     }
 
     const tempDir = os.tmpdir();
-    const sourcePath = path.join(tempDir, `${versionId}_source.docx`);
+    const sourcePath = path.join(tempDir, `${jobId}_${versionId}_source.docx`);
     const buffer = Buffer.from(await fileBlob.arrayBuffer());
     await fs.writeFile(sourcePath, buffer);
 
@@ -1055,7 +1055,7 @@ export async function executeUpdateOperation(
     console.error('[CHAPTER-UPDATE] Error:', error);
     await updateOperationJob(jobId, {
       status: 'error',
-      error_message: error.message
+      errorMessage: error.message
     });
     throw error;
   }
