@@ -4,10 +4,11 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { GitBranch, CheckCircle2, Circle, ArrowLeftRight, Eye, Clock } from 'lucide-react';
+import { GitBranch, CheckCircle2, Circle, ArrowLeftRight, Eye, Clock, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { VersionDiff } from './version-diff';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 type ChapterVersion = {
   id: string;
@@ -23,6 +24,7 @@ type VersionHistoryProps = {
   versions: ChapterVersion[];
   chapterId: string;
   showHeader?: boolean;
+  onVersionDeleted?: (versionId: string) => void;
 };
 
 const OPERATION_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -38,11 +40,33 @@ function getOpConfig(operation: string) {
   return OPERATION_CONFIG[operation] ?? { label: operation, color: 'text-gray-400', bg: 'bg-gray-500/15 border-gray-500/30' };
 }
 
-export function VersionHistory({ versions, chapterId, showHeader = true }: VersionHistoryProps) {
+export function VersionHistory({ versions, chapterId, showHeader = true, onVersionDeleted }: VersionHistoryProps) {
   const router = useRouter();
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffLeft, setDiffLeft] = useState<ChapterVersion | null>(null);
   const [diffRight, setDiffRight] = useState<ChapterVersion | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleDeleteVersion = async (version: ChapterVersion) => {
+    if (version.createdByOperation === 'upload' && versions.length > 1) {
+      // Allow deleting original only if there are others, but warn
+    }
+    if (!confirm(`Excluir versão v${version.versionNumber} (${version.createdByOperation})? Esta ação não pode ser desfeita.`)) return;
+    try {
+      setDeletingId(version.id);
+      const res = await fetch(`/api/chapters/${chapterId}/versions/${version.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Falha ao excluir versão');
+      }
+      toast.success(`Versão v${version.versionNumber} excluída.`);
+      onVersionDeleted?.(version.id);
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao excluir versão');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   if (versions.length === 0) {
     return (
@@ -210,10 +234,25 @@ export function VersionHistory({ versions, chapterId, showHeader = true }: Versi
                           size="sm"
                           variant="ghost"
                           className="h-7 px-2 text-xs text-gray-400 hover:text-white hover:bg-white/10"
-                          onClick={() => router.push(`/chapters/${chapterId}/versions/${version.id}`)}
+                          onClick={() => router.push(`/chapters/${chapterId}/agent`)}
                         >
                           Abrir
                         </Button>
+                        {versions.length > 1 && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-xs text-gray-500 hover:text-red-400 hover:bg-red-500/10"
+                            onClick={() => handleDeleteVersion(version)}
+                            disabled={deletingId === version.id}
+                            title="Excluir esta versão"
+                          >
+                            {deletingId === version.id
+                              ? <span className="h-3 w-3 border border-gray-500 border-t-transparent rounded-full animate-spin inline-block" />
+                              : <Trash2 className="h-3 w-3" />
+                            }
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </div>
