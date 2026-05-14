@@ -10,7 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   ArrowLeft, Send, FileText, PanelLeftClose, PanelLeftOpen, Sparkles,
   Loader2, Trash2, Languages, Wand2, Sliders, SearchCheck, ArrowLeftRight,
-  CheckCircle2, AlertCircle, Bot, User as UserIcon, Download, BookOpen,
+  AlertCircle, Bot, User as UserIcon, Download, BookOpen,
   ChevronDown, Cpu, Ban, History, PlayCircle, ChevronUp, X, Edit3, Save,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -74,6 +74,8 @@ type ChatMessage = {
   aiProvider?: AIProvider;
   aiModel?: string;
   pendingEditPrompt?: string;
+  startedAt?: string;
+  startVersionNumber?: number;
 };
 
 type SlashCommand = {
@@ -146,6 +148,7 @@ export default function AgentModePage() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const resumedMessagesRef = useRef<Set<string>>(new Set());
 
   const storageKey = `agent-chat-${chapterId}`;
 
@@ -287,7 +290,7 @@ export default function AgentModePage() {
 
   const refreshVersions = async (): Promise<ChapterVersion[]> => {
     try {
-      const d = await fetch(`/api/chapters/${chapterId}/versions`).then(r => r.json());
+      const d = await fetch(`/api/chapters/${chapterId}/versions`, { cache: 'no-store' }).then(r => r.json());
       const list: ChapterVersion[] = (d.versions || []).sort(
         (a: any, b: any) => a.versionNumber - b.versionNumber
       );
@@ -296,6 +299,14 @@ export default function AgentModePage() {
     } catch {
       return [];
     }
+  };
+
+  const getOperationReviewHref = (command: string | undefined, jobId: string) => {
+    if (command === '/traduzir') return `/chapters/${chapterId}/translate/${jobId}`;
+    if (command === '/adaptar') return `/chapters/${chapterId}/adapt/${jobId}`;
+    if (command === '/ajustar') return `/chapters/${chapterId}/adjust/${jobId}`;
+    if (command === '/revisar') return `/norms-update/${jobId}`;
+    return undefined;
   };
 
   const handleDownload = async () => {
@@ -355,7 +366,7 @@ export default function AgentModePage() {
     jobId: string,
     asstId: string,
     opLabel: string,
-    opts?: { silent?: boolean }
+    opts?: { silent?: boolean; command?: string }
   ): Promise<string | null> => {
     const start = Date.now();
     const TIMEOUT_MS = 20 * 60 * 1000;
@@ -363,16 +374,20 @@ export default function AgentModePage() {
     while (Date.now() - start < TIMEOUT_MS) {
       await new Promise((r) => setTimeout(r, 2500));
       try {
-        const res = await fetch(`/api/chapters/${chapterId}/operations/${jobId}`);
+        const res = await fetch(`/api/chapters/${chapterId}/operations/${jobId}`, { cache: 'no-store' });
         if (!res.ok) continue;
         const data = await res.json();
         const job = data.job;
 
         if (job.status === 'completed' || job.status === 'success') {
+          const reviewHref = getOperationReviewHref(opts?.command, jobId);
           updateMessage(asstId, {
             status: 'success',
-            content: `${opLabel} concluído. Revise aqui no agente e clique em "Aplicar como nova versão" para salvar.`,
+            content: reviewHref
+              ? `${opLabel} concluído. Abra a revisão para conferir as sugestões antes de aplicar.`
+              : `${opLabel} concluído. Nova versão disponível no histórico.`,
             jobId,
+            jobResultHref: reviewHref,
             newVersionId: job.newVersionId,
           });
 
@@ -430,6 +445,61 @@ export default function AgentModePage() {
     return null;
   };
 
+  const pollNormsJob = async (jobId: string, asstId: string): Promise<void> => {
+    const start = Date.now();
+    const TIMEOUT_MS = 30 * 60 * 1000;
+    const reviewHref = getOperationReviewHref('/revisar', jobId);
+
+    while (Date.now() - start < TIMEOUT_MS) {
+      await new Promise((r) => setTimeout(r, 2500));
+      try {
+        const res = await fetch(`/api/norms-update/${jobId}`, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const data = await res.json();
+
+        if (data.status === 'completed') {
+          const total = Number(data.stats?.total ?? data.progress?.totalReferences ?? 0);
+          updateMessage(asstId, {
+            status: 'success',
+            jobId,
+            jobResultHref: reviewHref,
+            content: total > 0
+              ? `Revisão de normas concluída. Foram encontradas ${total} referência(s); abra a revisão para conferir e aplicar.`
+              : 'Revisão de normas concluída. Nenhuma referência normativa foi encontrada.',
+          });
+          toast.success('Revisão de normas concluída!', {
+            description: total > 0 ? 'Abra a revisão para conferir os resultados.' : 'Nenhuma norma foi encontrada no documento.',
+            duration: 6000,
+          });
+          return;
+        }
+
+        if (data.status === 'error') {
+          updateMessage(asstId, {
+            status: 'error',
+            content: data.error || 'Falha ao revisar normas.',
+          });
+          return;
+        }
+
+        const pct = Number(data.progress?.percentage ?? 0);
+        updateMessage(asstId, {
+          status: 'running',
+          jobId,
+          jobResultHref: reviewHref,
+          content: `Revisando normas... ${Math.min(100, Math.max(0, Math.round(pct)))}%`,
+        });
+      } catch {}
+    }
+
+    updateMessage(asstId, {
+      status: 'running',
+      jobId,
+      jobResultHref: reviewHref,
+      content: 'Revisão de normas ainda está rodando no servidor. Abra a revisão para acompanhar.',
+    });
+  };
+
   const runAdjustPipeline = async (instructions: string): Promise<string | null> => {
     if (!selectedVersionId) return null;
     const ai = currentAI;
@@ -463,7 +533,7 @@ export default function AgentModePage() {
     }
     const data = await res.json();
     updateMessage(asstId, { jobId: data.jobId });
-    return pollJob(data.jobId, asstId, 'Ajuste');
+    return pollJob(data.jobId, asstId, 'Ajuste', { command: '/ajustar' });
   };
 
   /**
@@ -481,7 +551,7 @@ export default function AgentModePage() {
       return;
     }
 
-    const startVersionCount = versions.length;
+    const startVersionNumber = currentVersion?.versionNumber ?? versions[versions.length - 1]?.versionNumber ?? 0;
     const startedAt = new Date().toISOString();
     const asstId = appendMessage({
       role: 'assistant',
@@ -490,6 +560,8 @@ export default function AgentModePage() {
       command: '/todos',
       aiProvider: ai.provider,
       aiModel: ai.model,
+      startedAt,
+      startVersionNumber,
     });
 
     try {
@@ -508,7 +580,7 @@ export default function AgentModePage() {
         updateMessage(asstId, { status: 'error', content: err.error || 'Falha ao iniciar /todos' });
         return;
       }
-      await pollTodosPipeline(asstId, startedAt, startVersionCount);
+      await pollTodosPipeline(asstId, startedAt, startVersionNumber);
     } catch (e: any) {
       updateMessage(asstId, { status: 'error', content: `/todos falhou: ${e.message}` });
     }
@@ -540,7 +612,7 @@ export default function AgentModePage() {
     }
   };
 
-  const pollTodosPipeline = async (asstId: string, startedAt: string, startVersionCount: number) => {
+  const pollTodosPipeline = async (asstId: string, startedAt: string, startVersionNumber: number) => {
     const startMs = new Date(startedAt).getTime() - 5000;
     const timeoutMs = 45 * 60 * 1000;
     const started = Date.now();
@@ -549,8 +621,8 @@ export default function AgentModePage() {
       await new Promise((r) => setTimeout(r, 3000));
 
       const [jobsRes, versionsRes] = await Promise.all([
-        fetch('/api/jobs/active').catch(() => null),
-        fetch(`/api/chapters/${chapterId}/versions`).catch(() => null),
+        fetch('/api/jobs/active', { cache: 'no-store' }).catch(() => null),
+        fetch(`/api/chapters/${chapterId}/versions`, { cache: 'no-store' }).catch(() => null),
       ]);
       const jobsData = jobsRes?.ok ? await jobsRes.json().catch(() => ({})) : {};
       const versionsData = versionsRes?.ok ? await versionsRes.json().catch(() => ({})) : {};
@@ -560,7 +632,7 @@ export default function AgentModePage() {
         job.target?.id === chapterId &&
         new Date(job.createdAt).getTime() >= startMs
       );
-      const running = chapterJobs.filter((job: any) => job.status === 'pending' || job.status === 'running');
+      const running = chapterJobs.filter((job: any) => ['pending', 'running', 'processing'].includes(job.status));
       const failed = chapterJobs.find((job: any) => job.status === 'error');
       const completedOps = new Set(
         chapterJobs
@@ -577,11 +649,12 @@ export default function AgentModePage() {
         return;
       }
 
-      const versionDelta = Math.max(0, freshVersions.length - startVersionCount);
+      const latestVersion = freshVersions[freshVersions.length - 1];
+      const versionDelta = Math.max(0, (latestVersion?.versionNumber ?? startVersionNumber) - startVersionNumber);
       const label =
-        completedOps.has('update') ? 'Passo 3/3 concluído: revisão de leis aplicada.' :
-        completedOps.has('adapt') ? 'Passo 3/3 em andamento: revisando leis na versão simplificada.' :
-        completedOps.has('translate') ? 'Passo 2/3 em andamento: adaptando a versão traduzida.' :
+        versionDelta >= 3 || completedOps.has('update') ? 'Passo 3/3 concluído: revisão de leis aplicada.' :
+        versionDelta >= 2 || completedOps.has('adapt') ? 'Passo 3/3 em andamento: revisando leis na versão simplificada.' :
+        versionDelta >= 1 || completedOps.has('translate') ? 'Passo 2/3 em andamento: adaptando a versão traduzida.' :
         'Passo 1/3 em andamento: traduzindo para português.';
 
       updateMessage(asstId, {
@@ -590,21 +663,22 @@ export default function AgentModePage() {
       });
 
       const allDone =
-        completedOps.has('translate') &&
-        completedOps.has('adapt') &&
-        completedOps.has('update') &&
-        running.length === 0 &&
-        versionDelta >= 3;
+        versionDelta >= 3 &&
+        (
+          running.length === 0 ||
+          (completedOps.has('translate') && completedOps.has('adapt') && completedOps.has('update'))
+        );
       if (allDone) {
         if (freshVersions.length > 0) {
           setVersions(freshVersions);
-          setSelectedVersionId(freshVersions[freshVersions.length - 1].id);
+          setSelectedVersionId(latestVersion.id);
         } else {
           await refreshVersions();
         }
         updateMessage(asstId, {
           status: 'success',
           content: `/todos concluído. Foram salvas ${versionDelta} nova(s) versão(ões), sempre usando a versão anterior mais recente como entrada.`,
+          newVersionId: latestVersion?.id,
         });
         toast.success('/todos concluído!', {
           description: 'Tradução, adaptação e revisão foram aplicadas automaticamente.',
@@ -620,6 +694,90 @@ export default function AgentModePage() {
       content: '/todos ainda está rodando no servidor. O chat continuará disponível; acompanhe também pelo botão Operações.',
     });
   };
+
+  const reconcileLegacyTodosMessage = async (message: ChatMessage) => {
+    const startMs = message.timestamp - 5000;
+    const [jobsRes, versionsRes] = await Promise.all([
+      fetch('/api/jobs/active', { cache: 'no-store' }).catch(() => null),
+      fetch(`/api/chapters/${chapterId}/versions`, { cache: 'no-store' }).catch(() => null),
+    ]);
+    const jobsData = jobsRes?.ok ? await jobsRes.json().catch(() => ({})) : {};
+    const versionsData = versionsRes?.ok ? await versionsRes.json().catch(() => ({})) : {};
+    const chapterJobs = (jobsData.jobs || []).filter((job: any) =>
+      job.type === 'chapter-operation' &&
+      job.target?.id === chapterId &&
+      new Date(job.createdAt).getTime() >= startMs
+    );
+    const running = chapterJobs.filter((job: any) => ['pending', 'running', 'processing'].includes(job.status));
+    const failed = chapterJobs.find((job: any) => job.status === 'error');
+    const completedOps = new Set(
+      chapterJobs
+        .filter((job: any) => job.status === 'completed')
+        .map((job: any) => job.operation)
+    );
+    const freshVersions = (versionsData.versions || []).sort((a: any, b: any) => a.versionNumber - b.versionNumber);
+    const latestVersion = freshVersions[freshVersions.length - 1];
+
+    if (failed) {
+      updateMessage(message.id, {
+        status: 'error',
+        content: `/todos falhou no passo ${failed.operation || ''}: ${failed.errorMessage || 'erro desconhecido'}`,
+      });
+      return;
+    }
+
+    if (completedOps.has('update') || (running.length === 0 && chapterJobs.length > 0)) {
+      if (freshVersions.length > 0) {
+        setVersions(freshVersions);
+        setSelectedVersionId(latestVersion.id);
+      }
+      updateMessage(message.id, {
+        status: 'success',
+        content: '/todos concluído. As versões mais recentes já estão disponíveis no histórico.',
+        newVersionId: latestVersion?.id,
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (loadingChapter || versions.length === 0) return;
+    for (const message of messages) {
+      if (message.status !== 'running' || message.role !== 'assistant') continue;
+      if (resumedMessagesRef.current.has(message.id)) continue;
+
+      if (
+        message.command === '/todos' &&
+        message.startedAt &&
+        typeof message.startVersionNumber === 'number'
+      ) {
+        resumedMessagesRef.current.add(message.id);
+        pollTodosPipeline(message.id, message.startedAt, message.startVersionNumber);
+        continue;
+      }
+
+      if (message.command === '/todos') {
+        resumedMessagesRef.current.add(message.id);
+        reconcileLegacyTodosMessage(message);
+        continue;
+      }
+
+      if (message.command === '/revisar' && message.jobId) {
+        resumedMessagesRef.current.add(message.id);
+        pollNormsJob(message.jobId, message.id);
+        continue;
+      }
+
+      if (message.jobId && message.command) {
+        const label =
+          message.command === '/traduzir' ? 'Tradução' :
+          message.command === '/adaptar' ? 'Adaptação' :
+          message.command === '/ajustar' ? 'Ajuste' :
+          'Operação';
+        resumedMessagesRef.current.add(message.id);
+        pollJob(message.jobId, message.id, label, { command: message.command });
+      }
+    }
+  }, [loadingChapter, messages, versions.length]);
 
   const runChat = async (userText: string) => {
     if (!docText) {
@@ -769,7 +927,7 @@ export default function AgentModePage() {
           if (!res.ok) { const err = await res.json().catch(() => ({})); updateMessage(asstId, { status: 'error', content: `Erro: ${err.error || 'Falha ao iniciar tradução'}` }); return; }
           const { jobId } = await res.json();
           updateMessage(asstId, { jobId });
-          await pollJob(jobId, asstId, 'Tradução');
+          await pollJob(jobId, asstId, 'Tradução', { command: '/traduzir' });
           return;
         }
 
@@ -791,7 +949,7 @@ export default function AgentModePage() {
           if (!res.ok) { const err = await res.json().catch(() => ({})); updateMessage(asstId, { status: 'error', content: `Erro: ${err.error || 'Falha ao iniciar adaptação'}` }); return; }
           const { jobId } = await res.json();
           updateMessage(asstId, { jobId });
-          await pollJob(jobId, asstId, 'Adaptação');
+          await pollJob(jobId, asstId, 'Adaptação', { command: '/adaptar' });
           return;
         }
 
@@ -815,7 +973,13 @@ export default function AgentModePage() {
           });
           if (!res.ok) { const err = await res.json().catch(() => ({})); updateMessage(asstId, { status: 'error', content: `Erro: ${err.error || 'Falha ao iniciar revisão'}` }); return; }
           const { jobId } = await res.json();
-          updateMessage(asstId, { status: 'success', jobId, content: `Revisão de normas iniciada. Acompanhe em /norms-update/${jobId}.` });
+          updateMessage(asstId, {
+            status: 'running',
+            jobId,
+            jobResultHref: getOperationReviewHref('/revisar', jobId),
+            content: 'Revisão de normas iniciada. Vou atualizar aqui quando terminar.',
+          });
+          await pollNormsJob(jobId, asstId);
           return;
         }
 
@@ -1089,7 +1253,6 @@ export default function AgentModePage() {
                   <MessageBubble
                     key={msg.id}
                     message={msg}
-                    chapterId={chapterId}
                     versions={versions}
                     onViewVersion={(vId) => {
                       setSelectedVersionId(vId);
@@ -1099,11 +1262,6 @@ export default function AgentModePage() {
                       updateMessage(msg.id, { pendingEditPrompt: undefined });
                       setSending(true);
                       runAdjustPipeline(prompt).finally(() => setSending(false));
-                    }}
-                    onApplied={async () => {
-                      const fresh = await refreshVersions();
-                      const newest = fresh[fresh.length - 1];
-                      if (newest) setSelectedVersionId(newest.id);
                     }}
                   />
                 ))}
@@ -1278,39 +1436,13 @@ function WelcomeBlock({ onPick }: { onPick: (cmd: string) => void }) {
 // ─── MessageBubble ────────────────────────────────────────────────────────────
 
 function MessageBubble({
-  message, chapterId, versions, onApplied, onApplyPendingEdit, onViewVersion,
+  message, versions, onApplyPendingEdit, onViewVersion,
 }: {
   message: ChatMessage;
-  chapterId: string;
   versions?: ChapterVersion[];
-  onApplied: () => void;
   onApplyPendingEdit?: (prompt: string) => void;
   onViewVersion?: (versionId: string) => void;
 }) {
-  const [applying, setApplying] = useState(false);
-
-  const handleApply = async () => {
-    if (!message.jobId) return;
-    try {
-      setApplying(true);
-      const res = await fetch(`/api/chapters/${chapterId}/operations/${message.jobId}/apply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ acceptedSuggestionIds: [] }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Falha ao aplicar');
-      }
-      toast.success('Nova versão aplicada!');
-      onApplied();
-    } catch (e: any) {
-      toast.error(e.message);
-    } finally {
-      setApplying(false);
-    }
-  };
-
   if (message.role === 'system') {
     return (
       <div className="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
@@ -1365,14 +1497,14 @@ function MessageBubble({
             <div className="flex items-center gap-2 text-xs text-gray-500">
               <Loader2 className="h-3 w-3 animate-spin" />
               Processando...
-              {message.command === '/todos' && message.jobResultHref && (
+              {message.jobResultHref && (
                 <Link
                   href={message.jobResultHref}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-blue-400 hover:text-blue-300 ml-1"
                 >
-                  Ver operação ↗
+                  Ver revisão ↗
                 </Link>
               )}
             </div>
@@ -1381,7 +1513,7 @@ function MessageBubble({
                 <p className="text-[11px] text-gray-600 leading-relaxed">
                   Pode sair desta página — a operação continua no servidor.
                 </p>
-                {message.jobId && (
+                {message.jobId && message.command !== '/revisar' && (
                   <button
                     onClick={async (e) => {
                       e.preventDefault();
@@ -1428,16 +1560,34 @@ function MessageBubble({
           </div>
         )}
 
-        {message.status === 'success' && message.jobId && message.command && message.command !== '/comparar' && message.command !== '/revisar' && message.command !== '/todos' && (
-          <div className="flex items-center gap-2 pt-1">
-            <Button
-              size="sm"
-              onClick={handleApply}
-              disabled={applying}
-              className="h-7 text-xs bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800"
-            >
-              {applying ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Aplicando...</> : <><CheckCircle2 className="h-3 w-3 mr-1" />Aplicar como versão</>}
-            </Button>
+        {message.status === 'success' && message.jobId && message.command && message.command !== '/comparar' && message.command !== '/todos' && (
+          <div className="flex items-center gap-2 pt-1 flex-wrap">
+            {message.jobResultHref && (
+              <Link
+                href={message.jobResultHref}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button
+                  size="sm"
+                  className="h-7 text-xs bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800"
+                >
+                  <SearchCheck className="h-3 w-3 mr-1" />
+                  Ver revisão
+                </Button>
+              </Link>
+            )}
+            {message.newVersionId && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onViewVersion?.(message.newVersionId!)}
+                className="h-7 text-xs border-white/15 text-gray-300 hover:bg-white/10 gap-1"
+              >
+                <FileText className="h-3 w-3" />
+                Ver versão
+              </Button>
+            )}
           </div>
         )}
 
