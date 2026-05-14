@@ -11,7 +11,7 @@ import {
   ArrowLeft, Send, FileText, PanelLeftClose, PanelLeftOpen, Sparkles,
   Loader2, Trash2, Languages, Wand2, Sliders, SearchCheck, ArrowLeftRight,
   CheckCircle2, AlertCircle, Bot, User as UserIcon, Download, BookOpen,
-  ChevronDown, Cpu, Ban, History, PlayCircle, ChevronUp, X,
+  ChevronDown, Cpu, Ban, History, PlayCircle, ChevronUp, X, Edit3, Save,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -122,6 +122,9 @@ export default function AgentModePage() {
   const [docText, setDocText] = useState<string>('');
   const [loadingDoc, setLoadingDoc] = useState(false);
   const [loadingChapter, setLoadingChapter] = useState(true);
+  const [editingDoc, setEditingDoc] = useState(false);
+  const [editText, setEditText] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const [showDoc, setShowDoc] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
@@ -240,9 +243,17 @@ export default function AgentModePage() {
         const res = await fetch(`/api/chapters/${chapterId}/versions/${selectedVersionId}/text`);
         if (!res.ok) throw new Error('Falha ao carregar documento');
         const data = await res.json();
-        if (!cancelled) setDocText(data.text || '');
+        if (!cancelled) {
+          setDocText(data.text || '');
+          setEditText(data.text || '');
+          setEditingDoc(false);
+        }
       } catch (e: any) {
-        if (!cancelled) setDocText('');
+        if (!cancelled) {
+          setDocText('');
+          setEditText('');
+          setEditingDoc(false);
+        }
         toast.error(e.message || 'Erro ao carregar documento');
       } finally {
         if (!cancelled) setLoadingDoc(false);
@@ -503,6 +514,32 @@ export default function AgentModePage() {
     }
   };
 
+  const handleSaveManualEdit = async () => {
+    if (!selectedVersionId || !editText.trim()) return;
+    try {
+      setSavingEdit(true);
+      const res = await fetch(`/api/chapters/${chapterId}/versions/${selectedVersionId}/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: editText }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Falha ao salvar edição');
+
+      const fresh = await refreshVersions();
+      const newVersionId = data.newVersionId || fresh[fresh.length - 1]?.id;
+      if (newVersionId) setSelectedVersionId(newVersionId);
+      setDocText(editText);
+      setEditingDoc(false);
+      setShowHistory(true);
+      toast.success('Edição salva como nova versão.');
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao salvar edição');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const pollTodosPipeline = async (asstId: string, startedAt: string, startVersionCount: number) => {
     const startMs = new Date(startedAt).getTime() - 5000;
     const timeoutMs = 45 * 60 * 1000;
@@ -552,7 +589,12 @@ export default function AgentModePage() {
         content: `${label}\nVersões novas salvas até agora: ${versionDelta}.`,
       });
 
-      const allDone = completedOps.has('translate') && completedOps.has('adapt') && completedOps.has('update') && running.length === 0;
+      const allDone =
+        completedOps.has('translate') &&
+        completedOps.has('adapt') &&
+        completedOps.has('update') &&
+        running.length === 0 &&
+        versionDelta >= 3;
       if (allDone) {
         if (freshVersions.length > 0) {
           setVersions(freshVersions);
@@ -968,7 +1010,50 @@ export default function AgentModePage() {
                     <Badge className="bg-red-600 text-white text-[10px] px-1.5 py-0">Atual</Badge>
                   )}
                 </div>
-                <span className="text-xs text-gray-600">{docText.length.toLocaleString()} chars</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-600">
+                    {(editingDoc ? editText.length : docText.length).toLocaleString()} chars
+                  </span>
+                  {editingDoc ? (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setEditText(docText);
+                          setEditingDoc(false);
+                        }}
+                        disabled={savingEdit}
+                        className="h-8 text-xs text-gray-400 hover:text-white"
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleSaveManualEdit}
+                        disabled={savingEdit || !editText.trim() || editText === docText}
+                        className="h-8 gap-1.5 bg-red-600 hover:bg-red-700 text-xs"
+                      >
+                        {savingEdit ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                        Salvar versão
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setEditText(docText);
+                        setEditingDoc(true);
+                      }}
+                      disabled={!docText || loadingDoc}
+                      className="h-8 gap-1.5 text-xs text-gray-400 hover:text-white"
+                    >
+                      <Edit3 className="h-3.5 w-3.5" />
+                      Editar
+                    </Button>
+                  )}
+                </div>
               </div>
               <ScrollArea className="flex-1">
                 <div className="p-6">
@@ -976,6 +1061,13 @@ export default function AgentModePage() {
                     <div className="flex items-center justify-center py-20">
                       <Loader2 className="h-6 w-6 text-red-500 animate-spin" />
                     </div>
+                  ) : editingDoc ? (
+                    <textarea
+                      value={editText}
+                      onChange={(event) => setEditText(event.target.value)}
+                      spellCheck
+                      className="min-h-[calc(100vh-220px)] w-full resize-y rounded-lg border border-white/10 bg-black/30 p-4 font-sans text-sm leading-relaxed text-gray-100 outline-none transition focus:border-red-500/60 focus:ring-2 focus:ring-red-500/20"
+                    />
                   ) : docText ? (
                     <pre className="whitespace-pre-wrap font-sans text-sm text-gray-300 leading-relaxed">{docText}</pre>
                   ) : (
