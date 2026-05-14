@@ -92,6 +92,7 @@ const COMMANDS: SlashCommand[] = [
   { name: '/adaptar',   args: '<estilo>',     example: '/adaptar simplificado',                  description: 'Adapta o tom (academic, professional, simplified)',     icon: <Wand2       className="h-4 w-4" />, color: 'text-pink-400' },
   { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',          description: 'Aplica uma edição: IA cria uma nova versão',            icon: <Sliders     className="h-4 w-4" />, color: 'text-orange-400' },
   { name: '/revisar',   args: '',             example: '/revisar',                               description: 'Verifica se leis citadas continuam vigentes',           icon: <SearchCheck className="h-4 w-4" />, color: 'text-yellow-400' },
+  { name: '/todos',     args: '',             example: '/todos',                                 description: 'Traduz, adapta e revisa usando sempre a versão mais recente', icon: <Sparkles className="h-4 w-4" />, color: 'text-red-400' },
   { name: '/diff',      args: '[v1] [v2]',    example: '/diff 1 atual',                          description: 'Compara duas versões (padrão: original vs atual)',      icon: <ArrowLeftRight className="h-4 w-4" />, color: 'text-blue-400' },
   { name: '/limpar',    args: '',             example: '/limpar',                                description: 'Limpa a conversa',                                       icon: <Trash2      className="h-4 w-4" />, color: 'text-gray-400' },
 ];
@@ -324,7 +325,7 @@ export default function AgentModePage() {
         if (job.status === 'completed' || job.status === 'success') {
           updateMessage(asstId, {
             status: 'success',
-            content: `${opLabel} concluído. Nova versão criada como rascunho — clique em "Ver detalhes" para revisar e aplicar.`,
+            content: `${opLabel} concluído. Revise aqui no agente e clique em "Aplicar como nova versão" para salvar.`,
             jobId,
             newVersionId: job.newVersionId,
           });
@@ -671,6 +672,43 @@ export default function AgentModePage() {
           updateMessage(asstId, {
             status: 'success', jobId,
             content: `Revisão de normas iniciada. Acompanhe em /norms-update/${jobId}.`,
+          });
+          return;
+        }
+
+        case '/todos': {
+          const ai = currentAI;
+          if (!ai) { appendMessage({ role: 'system', content: 'Selecione um provedor de IA no topo (ou configure em Configurações).', status: 'error' }); return; }
+
+          const asstId = appendMessage({
+            role: 'assistant',
+            content: '/todos iniciado: traduzir português → adaptar simplificado → revisar leis. As etapas salvam automaticamente e sempre usam a versão mais recente anterior.',
+            status: 'running',
+            command: cmd,
+            aiProvider: ai.provider,
+            aiModel: ai.model,
+          });
+
+          const res = await fetch(`/api/chapters/${chapterId}/todos`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              provider: ai.provider,
+              model: ai.model,
+              targetLanguage: 'pt',
+              adaptStyle: 'simplified',
+            }),
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            updateMessage(asstId, { status: 'error', content: err.error || 'Falha ao iniciar /todos' });
+            return;
+          }
+
+          updateMessage(asstId, {
+            status: 'success',
+            content: '/todos está rodando no servidor. Nenhuma revisão manual será aberta: cada etapa salva a nova versão e a próxima usa essa versão automaticamente.',
           });
           return;
         }
@@ -1147,23 +1185,6 @@ function MessageBubble({
             >
               {applying ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Aplicando...</> : <><CheckCircle2 className="h-3 w-3 mr-1" />Aplicar como nova versão</>}
             </Button>
-            {(() => {
-              const routeMap: Record<string, string> = {
-                '/traduzir': 'translate',
-                '/adaptar': 'adapt',
-                '/ajustar': 'adjust',
-              };
-              const route = routeMap[message.command!];
-              if (!route) return null;
-              return (
-                <Link
-                  href={`/chapters/${chapterId}/${route}/${message.jobId}`}
-                  className="text-xs text-gray-400 hover:text-white underline-offset-2 hover:underline"
-                >
-                  Ver detalhes
-                </Link>
-              );
-            })()}
           </div>
         )}
 

@@ -67,15 +67,6 @@ export async function GET(_req: NextRequest) {
       for (const j of chapterJobs ?? []) {
         const ch: any = (j as any).chapters;
         const op = (j as any).operation as string;
-        // Map operation -> result page route segment
-        const routeMap: Record<string, string> = {
-          improve: 'improvements',
-          translate: 'translate',
-          adjust: 'adjust',
-          adapt: 'adapt',
-          update: 'update',
-        };
-        const seg = routeMap[op] ?? op;
         jobs.push({
           id: (j as any).id,
           type: 'chapter-operation',
@@ -91,7 +82,7 @@ export async function GET(_req: NextRequest) {
             title: ch?.title,
             thesisId: ch?.thesis_id,
           },
-          resultHref: `/chapters/${(j as any).chapter_id}/${seg}/${(j as any).id}`,
+          resultHref: `/chapters/${(j as any).chapter_id}/agent`,
         });
       }
     } catch (e) {

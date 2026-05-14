@@ -192,12 +192,6 @@ export function JobsStatusButton() {
             )}
           </div>
 
-          {/* Footer */}
-          <div className="px-4 py-2 border-t border-white/10 bg-white/[0.02]">
-            <p className="text-[10px] text-gray-600 leading-relaxed">
-              Atualiza a cada {POLL_INTERVAL_MS / 1000}s · Histórico das últimas 6h
-            </p>
-          </div>
         </div>
       )}
     </div>
