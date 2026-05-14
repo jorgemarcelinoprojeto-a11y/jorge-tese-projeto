@@ -144,7 +144,7 @@ async function executeImprovement(
       }
 
       const tempDir = os.tmpdir();
-      tempPath = path.join(tempDir, `${documentId}_improve.docx`);
+      tempPath = path.join(tempDir, `${jobId}_${documentId}_improve.docx`);
       const buffer = Buffer.from(await fileBlob.arrayBuffer());
       await fs.writeFile(tempPath, buffer);
     }

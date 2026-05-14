@@ -119,7 +119,7 @@ async function executeAdapt(
   sourceDocumentPath: string | undefined,
   style: 'academic' | 'professional' | 'simplified' | 'custom',
   targetAudience: string | undefined,
-  provider: 'openai' | 'gemini' | 'grok',
+  provider: 'openai' | 'gemini' | 'grok' | 'anthropic',
   model: string
 ) {
   try {
@@ -148,7 +148,7 @@ async function executeAdapt(
       }
 
       const tempDir = os.tmpdir();
-      tempPath = path.join(tempDir, `${documentId}_adapt.docx`);
+      tempPath = path.join(tempDir, `${jobId}_${documentId}_adapt.docx`);
       const buffer = Buffer.from(await fileBlob.arrayBuffer());
       await fs.writeFile(tempPath, buffer);
     }

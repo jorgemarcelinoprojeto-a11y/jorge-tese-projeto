@@ -137,7 +137,7 @@ export function ImportDocumentDialog({ open, onOpenChange, onCreated }: ImportDo
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[480px] bg-gradient-to-br from-gray-900 via-gray-900 to-black border-white/10 p-0 overflow-hidden">
+      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-[560px] bg-gradient-to-br from-gray-900 via-gray-900 to-black border-white/10 p-0 overflow-hidden">
         {/* Header */}
         <div className="px-6 pt-6 pb-4 border-b border-white/5">
           <DialogHeader>
@@ -258,17 +258,17 @@ export function ImportDocumentDialog({ open, onOpenChange, onCreated }: ImportDo
 
               <p className="text-sm text-gray-400 font-medium">Como você vai trabalhar neste documento?</p>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   onClick={() => { setDocType('thesis'); setStep('details'); }}
-                  className="group flex flex-col items-start gap-3 p-4 rounded-xl border-2 border-white/10 bg-white/[0.03] text-left transition-all hover:border-red-500/50 hover:bg-red-500/[0.05]"
+                  className="group min-w-0 flex flex-col items-start gap-3 p-4 rounded-xl border-2 border-white/10 bg-white/[0.03] text-left transition-all hover:border-red-500/50 hover:bg-red-500/[0.05]"
                 >
                   <div className="p-2.5 bg-red-500/15 rounded-lg group-hover:bg-red-500/25 transition-colors">
                     <BookOpen className="h-5 w-5 text-red-400" />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-1 min-w-0">
                     <p className="text-sm font-semibold text-white">Tese</p>
-                    <p className="text-xs text-gray-400 leading-relaxed">
+                    <p className="text-xs text-gray-400 leading-relaxed break-words">
                       Capítulos separados — cada um com seu próprio histórico de versões
                     </p>
                   </div>
@@ -276,14 +276,14 @@ export function ImportDocumentDialog({ open, onOpenChange, onCreated }: ImportDo
 
                 <button
                   onClick={() => { setDocType('project'); setStep('details'); }}
-                  className="group flex flex-col items-start gap-3 p-4 rounded-xl border-2 border-white/10 bg-white/[0.03] text-left transition-all hover:border-red-500/50 hover:bg-red-500/[0.05]"
+                  className="group min-w-0 flex flex-col items-start gap-3 p-4 rounded-xl border-2 border-white/10 bg-white/[0.03] text-left transition-all hover:border-red-500/50 hover:bg-red-500/[0.05]"
                 >
                   <div className="p-2.5 bg-red-500/15 rounded-lg group-hover:bg-red-500/25 transition-colors">
                     <Folder className="h-5 w-5 text-red-400" />
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-1 min-w-0">
                     <p className="text-sm font-semibold text-white">Projeto</p>
-                    <p className="text-xs text-gray-400 leading-relaxed">
+                    <p className="text-xs text-gray-400 leading-relaxed break-words">
                       Documento completo — gerenciado como um único arquivo
                     </p>
                   </div>

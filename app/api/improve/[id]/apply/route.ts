@@ -69,8 +69,8 @@ export async function POST(
     }
 
     const tempDir = os.tmpdir();
-    const tempInputPath = path.join(tempDir, `${job.document_id}_original.docx`);
-    const tempOutputPath = path.join(tempDir, `${job.document_id}_improved.docx`);
+    const tempInputPath = path.join(tempDir, `${jobId}_${job.document_id}_original.docx`);
+    const tempOutputPath = path.join(tempDir, `${jobId}_${job.document_id}_improved.docx`);
 
     const buffer = Buffer.from(await fileBlob.arrayBuffer());
     await fs.writeFile(tempInputPath, buffer);

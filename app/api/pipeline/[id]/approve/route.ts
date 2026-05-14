@@ -206,7 +206,7 @@ async function applyImproveChanges(
   const buffer = Buffer.from(arrayBuffer);
 
   // Save to temp location
-  const tempPath = path.join(os.tmpdir(), `pipeline_improved_${improveJobId}.docx`);
+  const tempPath = path.join(os.tmpdir(), `pipeline_improved_${improveJobId}_${Date.now()}.docx`);
   await fs.writeFile(tempPath, buffer);
 
   return tempPath;
@@ -233,7 +233,7 @@ async function applyNormsChanges(
   const arrayBuffer = await blob.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  const tempPath = path.join(os.tmpdir(), `pipeline_norms_${normsJobId}.docx`);
+  const tempPath = path.join(os.tmpdir(), `pipeline_norms_${normsJobId}_${Date.now()}.docx`);
   await fs.writeFile(tempPath, buffer);
 
   return tempPath;
@@ -260,7 +260,7 @@ async function applyAdjustChanges(
   const arrayBuffer = await blob.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  const tempPath = path.join(os.tmpdir(), `pipeline_adjust_${adjustJobId}.docx`);
+  const tempPath = path.join(os.tmpdir(), `pipeline_adjust_${adjustJobId}_${Date.now()}.docx`);
   await fs.writeFile(tempPath, buffer);
 
   return tempPath;
@@ -301,7 +301,7 @@ async function applyAdaptChanges(
   const arrayBuffer = await blob.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  const tempPath = path.join(os.tmpdir(), `pipeline_adapt_${adaptJobId}.docx`);
+  const tempPath = path.join(os.tmpdir(), `pipeline_adapt_${adaptJobId}_${Date.now()}.docx`);
   await fs.writeFile(tempPath, buffer);
 
   return tempPath;
