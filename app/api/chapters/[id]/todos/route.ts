@@ -5,6 +5,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { supabase } from '@/lib/supabase';
 import { translateDocx, applySuggestionsToDocx, type ApplyDocxSuggestion } from '@/lib/translation/docx-translator';
+import JSZip from 'jszip';
 import { SupportedLanguage } from '@/lib/translation/types';
 import { AIProvider } from '@/lib/ai/types';
 import { createOperationJob, updateOperationJob } from '@/lib/thesis/chapter-operations';
@@ -95,16 +96,17 @@ async function runTodos(
 
     latest = await getLatestVersion(chapterId, adaptedVersionId);
 
-    const normsPath = await runNormsStep(chapterId, latest.id, latest.file_path, config);
-    if (normsPath) {
-      tempPaths.push(normsPath);
-      await createChapterVersionFromFile(
+    const norms = await runNormsStep(chapterId, latest.id, latest.file_path, config);
+    if (norms.outputPath) {
+      tempPaths.push(norms.outputPath);
+      const normsVersionId = await createChapterVersionFromFile(
         chapterId,
         latest.id,
-        normsPath,
+        norms.outputPath,
         'update',
         { autoAppliedBy: '/todos' }
       );
+      await updateOperationJob(norms.jobId, { newVersionId: normsVersionId });
     }
   } finally {
     await Promise.all(tempPaths.map((p) => fs.unlink(p).catch(() => {})));
@@ -185,7 +187,10 @@ async function runAdaptStep(
         originalText: s.originalText || '',
         improvedText: s.adaptedText || '',
       }));
-      await applySuggestionsToDocx(inputPath, outputPath, docxSuggestions);
+      const applyResult = await applySuggestionsToDocx(inputPath, outputPath, docxSuggestions);
+      if (applyResult.appliedCount === 0) {
+        await applySuggestionTextFallback(inputPath, outputPath, docxSuggestions);
+      }
     }
 
     await updateOperationJob(jobId, {
@@ -208,7 +213,8 @@ async function runNormsStep(
   versionId: string,
   filePath: string,
   config: { provider: AIProvider; model: string }
-): Promise<string | null> {
+): Promise<{ outputPath: string | null; jobId: string }> {
+  const operationJobId = await createOperationJob(chapterId, versionId, 'update');
   const inputPath = await downloadVersionFile(versionId, filePath, 'todos_norms_input');
   const outputPath = path.join(os.tmpdir(), `${versionId}_todos_norms_${randomUUID()}.docx`);
   const jobId = randomUUID();
@@ -233,10 +239,12 @@ async function runNormsStep(
 
   if (insertError) {
     await fs.unlink(inputPath).catch(() => {});
+    await updateOperationJob(operationJobId, { status: 'error', errorMessage: insertError.message });
     throw new Error(`Falha ao criar job de normas: ${insertError.message}`);
   }
 
   try {
+    await updateOperationJob(operationJobId, { status: 'processing', progress: 10 });
     const { structure, paragraphs } = await extractDocumentStructure(inputPath);
     const paragraphsWithContext = paragraphs
       .filter((p: any) => !p.isHeader)
@@ -263,8 +271,13 @@ async function runNormsStep(
 
     if (references.length === 0) {
       await markNormsCompleted(jobId, []);
+      await updateOperationJob(operationJobId, {
+        status: 'completed',
+        progress: 100,
+        completedAt: new Date().toISOString(),
+      });
       await fs.unlink(inputPath).catch(() => {});
-      return null;
+      return { outputPath: null, jobId: operationJobId };
     }
 
     const verifiedReferences = await verifyMultipleNorms(
@@ -281,6 +294,9 @@ async function runNormsStep(
             progress_percentage: 10 + Math.floor((current / total) * 90),
           })
           .eq('id', jobId);
+        await updateOperationJob(operationJobId, {
+          progress: Math.min(95, 10 + Math.floor((current / total) * 90)),
+        });
       }
     );
 
@@ -288,17 +304,28 @@ async function runNormsStep(
 
     const referencesToApply = verifiedReferences.filter((r: NormReference) => r.suggestedText);
     if (referencesToApply.length === 0) {
+      await updateOperationJob(operationJobId, {
+        status: 'completed',
+        progress: 100,
+        completedAt: new Date().toISOString(),
+      });
       await fs.unlink(inputPath).catch(() => {});
-      return null;
+      return { outputPath: null, jobId: operationJobId };
     }
 
     await applyNormUpdatesToDocx(inputPath, outputPath, referencesToApply);
-    return outputPath;
+    await updateOperationJob(operationJobId, {
+      status: 'completed',
+      progress: 100,
+      completedAt: new Date().toISOString(),
+    });
+    return { outputPath, jobId: operationJobId };
   } catch (error: any) {
     await supabase
       .from('norm_update_jobs')
       .update({ status: 'error', error_message: error.message, completed_at: new Date().toISOString() })
       .eq('id', jobId);
+    await updateOperationJob(operationJobId, { status: 'error', errorMessage: error.message });
     await fs.unlink(outputPath).catch(() => {});
     throw error;
   } finally {
@@ -407,4 +434,47 @@ function getApiKey(provider: AIProvider | 'gemini'): string {
 
   if (!apiKey) throw new Error(`Chave de API não configurada para ${provider}`);
   return apiKey;
+}
+
+async function applySuggestionTextFallback(
+  inputPath: string,
+  outputPath: string,
+  suggestions: ApplyDocxSuggestion[]
+): Promise<void> {
+  const data = await fs.readFile(inputPath);
+  const zip = await JSZip.loadAsync(data);
+  const file = zip.file('word/document.xml');
+  if (!file) {
+    await fs.copyFile(inputPath, outputPath);
+    return;
+  }
+
+  let xml = await file.async('string');
+  let applied = 0;
+
+  for (const suggestion of suggestions) {
+    if (!suggestion.originalText || !suggestion.improvedText) continue;
+    const original = escapeXmlText(suggestion.originalText);
+    const improved = escapeXmlText(suggestion.improvedText);
+    if (xml.includes(original)) {
+      xml = xml.replace(original, improved);
+      applied++;
+    }
+  }
+
+  if (applied === 0) {
+    await fs.copyFile(inputPath, outputPath);
+    return;
+  }
+
+  zip.file('word/document.xml', Buffer.from(xml, 'utf-8'));
+  const outputBuffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  await fs.writeFile(outputPath, outputBuffer);
+}
+
+function escapeXmlText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
