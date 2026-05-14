@@ -360,7 +360,7 @@ export default function AgentModePage() {
         if (job.status === 'completed' || job.status === 'success') {
           updateMessage(asstId, {
             status: 'success',
-            content: `${opLabel} concluído. Nova versão criada — use o histórico abaixo para revisar.`,
+            content: `${opLabel} concluído. Revise aqui no agente e clique em "Aplicar como nova versão" para salvar.`,
             jobId,
             newVersionId: job.newVersionId,
           });
@@ -456,10 +456,8 @@ export default function AgentModePage() {
   };
 
   /**
-   * /todos — Executes 3 operations in sequence, each creating its own new version:
-   *   1. /traduzir português
-   *   2. /adaptar simplificado
-   *   3. /revisar leis
+   * /todos — starts the server-side sequence that saves each step automatically.
+   * The chat keeps polling so the user sees completion without leaving the agent.
    */
   const runTodosPipeline = async () => {
     if (!selectedVersionId) {
@@ -472,117 +470,113 @@ export default function AgentModePage() {
       return;
     }
 
-    let workingVersionId = selectedVersionId;
-
-    appendMessage({
-      role: 'system',
-      content: '/todos — Sequência automática iniciada:\n/traduzir português → /adaptar simplificado → /revisar leis',
-    });
-
-    // ── Passo 1: Traduzir para português ────────────────────────────────────
-    const asstId1 = appendMessage({
+    const startVersionCount = versions.length;
+    const startedAt = new Date().toISOString();
+    const asstId = appendMessage({
       role: 'assistant',
-      content: 'Passo 1/3 — Traduzindo para o português...',
+      content: '/todos iniciado: traduzir português → adaptar simplificado → revisar leis. Cada etapa salva uma nova versão e a próxima usa a versão mais recente.',
       status: 'running',
       command: '/todos',
       aiProvider: ai.provider,
       aiModel: ai.model,
     });
+
     try {
-      const res1 = await fetch(`/api/chapters/${chapterId}/translate`, {
+      const res = await fetch(`/api/chapters/${chapterId}/todos`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          versionId: workingVersionId,
           targetLanguage: 'pt',
-          provider: ai.provider, model: ai.model,
-          references: [],
+          adaptStyle: 'simplified',
+          provider: ai.provider,
+          model: ai.model,
         }),
       });
-      if (!res1.ok) {
-        const err = await res1.json().catch(() => ({}));
-        updateMessage(asstId1, { status: 'error', content: `Passo 1 falhou: ${err.error || 'Erro'}` });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        updateMessage(asstId, { status: 'error', content: err.error || 'Falha ao iniciar /todos' });
         return;
       }
-      const { jobId: jobId1 } = await res1.json();
-      updateMessage(asstId1, { jobId: jobId1, jobResultHref: `/chapters/${chapterId}/translate/${jobId1}` });
-      const newVId1 = await pollJob(jobId1, asstId1, 'Passo 1/3 — Tradução para português', { silent: true });
-      if (newVId1) workingVersionId = newVId1;
+      await pollTodosPipeline(asstId, startedAt, startVersionCount);
     } catch (e: any) {
-      updateMessage(asstId1, { status: 'error', content: `Passo 1 falhou: ${e.message}` });
-      return;
+      updateMessage(asstId, { status: 'error', content: `/todos falhou: ${e.message}` });
     }
+  };
 
-    // ── Passo 2: Adaptar para estilo simplificado ────────────────────────────
-    const asstId2 = appendMessage({
-      role: 'assistant',
-      content: 'Passo 2/3 — Adaptando para estilo simplificado...',
-      status: 'running',
-      command: '/todos',
-      aiProvider: ai.provider,
-      aiModel: ai.model,
-    });
-    try {
-      const res2 = await fetch(`/api/chapters/${chapterId}/adapt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          versionId: workingVersionId,
-          style: 'simplified',
-          provider: ai.provider, model: ai.model,
-          references: [], contextVersionIds: [],
-        }),
-      });
-      if (!res2.ok) {
-        const err = await res2.json().catch(() => ({}));
-        updateMessage(asstId2, { status: 'error', content: `Passo 2 falhou: ${err.error || 'Erro'}` });
+  const pollTodosPipeline = async (asstId: string, startedAt: string, startVersionCount: number) => {
+    const startMs = new Date(startedAt).getTime() - 5000;
+    const timeoutMs = 45 * 60 * 1000;
+    const started = Date.now();
+
+    while (Date.now() - started < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 3000));
+
+      const [jobsRes, versionsRes] = await Promise.all([
+        fetch('/api/jobs/active').catch(() => null),
+        fetch(`/api/chapters/${chapterId}/versions`).catch(() => null),
+      ]);
+      const jobsData = jobsRes?.ok ? await jobsRes.json().catch(() => ({})) : {};
+      const versionsData = versionsRes?.ok ? await versionsRes.json().catch(() => ({})) : {};
+
+      const chapterJobs = (jobsData.jobs || []).filter((job: any) =>
+        job.type === 'chapter-operation' &&
+        job.target?.id === chapterId &&
+        new Date(job.createdAt).getTime() >= startMs
+      );
+      const running = chapterJobs.filter((job: any) => job.status === 'pending' || job.status === 'running');
+      const failed = chapterJobs.find((job: any) => job.status === 'error');
+      const completedOps = new Set(
+        chapterJobs
+          .filter((job: any) => job.status === 'completed')
+          .map((job: any) => job.operation)
+      );
+      const freshVersions = (versionsData.versions || []).sort((a: any, b: any) => a.versionNumber - b.versionNumber);
+
+      if (failed) {
+        updateMessage(asstId, {
+          status: 'error',
+          content: `/todos falhou no passo ${failed.operation || ''}: ${failed.errorMessage || 'erro desconhecido'}`,
+        });
         return;
       }
-      const { jobId: jobId2 } = await res2.json();
-      updateMessage(asstId2, { jobId: jobId2, jobResultHref: `/chapters/${chapterId}/adapt/${jobId2}` });
-      const newVId2 = await pollJob(jobId2, asstId2, 'Passo 2/3 — Adaptação simplificada', { silent: true });
-      if (newVId2) workingVersionId = newVId2;
-    } catch (e: any) {
-      updateMessage(asstId2, { status: 'error', content: `Passo 2 falhou: ${e.message}` });
-      return;
-    }
 
-    // ── Passo 3: Revisar leis ────────────────────────────────────────────────
-    const asstId3 = appendMessage({
-      role: 'assistant',
-      content: 'Passo 3/3 — Verificando vigência das leis e normas citadas...',
-      status: 'running',
-      command: '/todos',
-      aiProvider: ai.provider,
-      aiModel: ai.model,
-    });
-    try {
-      const res3 = await fetch(`/api/chapters/${chapterId}/versions/${workingVersionId}/norms-update`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: ai.provider, model: ai.model }),
+      const versionDelta = Math.max(0, freshVersions.length - startVersionCount);
+      const label =
+        completedOps.has('update') ? 'Passo 3/3 concluído: revisão de leis aplicada.' :
+        completedOps.has('adapt') ? 'Passo 3/3 em andamento: revisando leis na versão simplificada.' :
+        completedOps.has('translate') ? 'Passo 2/3 em andamento: adaptando a versão traduzida.' :
+        'Passo 1/3 em andamento: traduzindo para português.';
+
+      updateMessage(asstId, {
+        status: 'running',
+        content: `${label}\nVersões novas salvas até agora: ${versionDelta}.`,
       });
-      if (!res3.ok) {
-        const err = await res3.json().catch(() => ({}));
-        updateMessage(asstId3, { status: 'error', content: `Passo 3 falhou: ${err.error || 'Erro'}` });
-      } else {
-        const { jobId: jobId3 } = await res3.json();
-        updateMessage(asstId3, { jobId: jobId3, jobResultHref: `/chapters/${chapterId}/update/${jobId3}` });
-        await pollJob(jobId3, asstId3, 'Passo 3/3 — Revisão de leis', { silent: true });
+
+      const allDone = completedOps.has('translate') && completedOps.has('adapt') && completedOps.has('update') && running.length === 0;
+      if (allDone) {
+        if (freshVersions.length > 0) {
+          setVersions(freshVersions);
+          setSelectedVersionId(freshVersions[freshVersions.length - 1].id);
+        } else {
+          await refreshVersions();
+        }
+        updateMessage(asstId, {
+          status: 'success',
+          content: `/todos concluído. Foram salvas ${versionDelta} nova(s) versão(ões), sempre usando a versão anterior mais recente como entrada.`,
+        });
+        toast.success('/todos concluído!', {
+          description: 'Tradução, adaptação e revisão foram aplicadas automaticamente.',
+          duration: 7000,
+        });
+        setShowHistory(true);
+        return;
       }
-    } catch (e: any) {
-      updateMessage(asstId3, { status: 'error', content: `Passo 3 falhou: ${e.message}` });
     }
 
-    appendMessage({
-      role: 'system',
-      content: '/todos concluído! As novas versões estão disponíveis no histórico abaixo.',
+    updateMessage(asstId, {
+      status: 'running',
+      content: '/todos ainda está rodando no servidor. O chat continuará disponível; acompanhe também pelo botão Operações.',
     });
-    toast.success('/todos concluído!', {
-      description: 'Sequência completa: tradução pt + adaptação simplificada + revisão de leis.',
-      duration: 7000,
-    });
-    setShowHistory(true);
   };
 
   const runChat = async (userText: string) => {
@@ -1352,23 +1346,6 @@ function MessageBubble({
             >
               {applying ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Aplicando...</> : <><CheckCircle2 className="h-3 w-3 mr-1" />Aplicar como versão</>}
             </Button>
-            {(() => {
-              const routeMap: Record<string, string> = {
-                '/traduzir': 'translate', '/adaptar': 'adapt', '/ajustar': 'adjust',
-              };
-              const route = routeMap[message.command!];
-              if (!route) return null;
-              return (
-                <Link
-                  href={`/chapters/${chapterId}/${route}/${message.jobId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-gray-400 hover:text-white underline-offset-2 hover:underline"
-                >
-                  Ver detalhes
-                </Link>
-              );
-            })()}
           </div>
         )}
 
