@@ -17,6 +17,9 @@ import { cn } from '@/lib/utils';
 import { AIErrorBanner } from '@/components/ai-error-banner';
 import { classifyAIError } from '@/lib/ai-error-message';
 import { cancelJobRequest } from '@/components/jobs-status-button';
+import { Multi3ComparePanel } from '@/components/multi-ai/multi3-compare-panel';
+import { parseMulti3Command, buildMulti3ApiBody, pollMulti3Session } from '@/lib/agent/multi3-client';
+import type { Multi3Session } from '@/lib/multi-ai/types';
 
 type AIProvider = 'openai' | 'gemini' | 'grok' | 'anthropic';
 
@@ -83,6 +86,7 @@ const COMMANDS: SlashCommand[] = [
   { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',   description: 'Aplica uma edição: IA cria uma nova versão',     icon: <Sliders     className="h-4 w-4" />, color: 'text-orange-400' },
   { name: '/revisar',   args: '',             example: '/revisar',                        description: 'Verifica se leis citadas continuam vigentes',     icon: <SearchCheck className="h-4 w-4" />, color: 'text-yellow-400' },
   { name: '/todos',     args: '',             example: '/todos',                          description: 'Traduz para português, adapta e revisa normas em sequência', icon: <Sparkles className="h-4 w-4" />, color: 'text-red-400' },
+  { name: '/3',         args: '<ias> <cmd>',  example: '/3 gemini openai claude /ajustar expandir', description: '3 IAs em paralelo → comparação → juiz', icon: <Cpu className="h-4 w-4" />, color: 'text-indigo-400' },
   { name: '/limpar',    args: '',             example: '/limpar',                         description: 'Limpa a conversa',                                  icon: <Trash2      className="h-4 w-4" />, color: 'text-gray-400' },
 ];
 
@@ -126,6 +130,9 @@ export default function ProjectAgentPage() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const [activeMulti3Session, setActiveMulti3Session] = useState<Multi3Session | null>(null);
+  const [multi3PanelOpen, setMulti3PanelOpen] = useState(false);
 
   const storageKey = `agent-chat-project-${projectId}`;
 
@@ -350,11 +357,73 @@ export default function ProjectAgentPage() {
   const handleCommand = async (raw: string) => {
     const trimmed = raw.trim();
     if (!trimmed) return;
+
+    const multi3Follow = parseMulti3Command(trimmed);
+    if (multi3Follow.kind === 'choose' && activeMulti3Session && selectedDocId) {
+      appendMessage({ role: 'user', content: trimmed });
+      setInput('');
+      try {
+        const res = await fetch(`/api/documents/${selectedDocId}/multi3/${activeMulti3Session.id}/accept`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: multi3Follow.provider }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        setActiveMulti3Session(data.session);
+        setMulti3PanelOpen(false);
+        toast.success('Versão aceita!');
+      } catch (e: any) {
+        appendMessage({ role: 'system', content: e.message, status: 'error' });
+      }
+      return;
+    }
+
     appendMessage({ role: 'user', content: trimmed });
     setInput('');
 
     if (!selectedDocId) {
       appendMessage({ role: 'system', content: 'Selecione um documento primeiro.', status: 'error' });
+      return;
+    }
+
+    const multi3Start = parseMulti3Command(trimmed);
+    if (multi3Start.kind === 'start') {
+      setSending(true);
+      const asstId = appendMessage({
+        role: 'assistant',
+        content: `Multi-IA iniciada (${multi3Start.providers.join(', ')})`,
+        status: 'running',
+        command: '/3',
+      });
+      try {
+        const models: Partial<Record<AIProvider, string>> = {};
+        for (const p of multi3Start.providers) {
+          models[p] = settings?.models?.[p]?.[0] || selectedModel;
+        }
+        const res = await fetch(`/api/documents/${selectedDocId}/multi3`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildMulti3ApiBody(multi3Start, selectedDocId, models)),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+
+        const finalSession = await pollMulti3Session(
+          `/api/documents/${selectedDocId}/multi3/${data.session.id}`,
+          setActiveMulti3Session
+        );
+        setActiveMulti3Session(finalSession);
+        setMulti3PanelOpen(true);
+        updateMessage(asstId, {
+          status: 'success',
+          content: `Comparação pronta. Juiz recomenda: ${finalSession.winnerProvider}. ${finalSession.judgeReasoning || ''}`,
+        });
+      } catch (e: any) {
+        updateMessage(asstId, { status: 'error', content: e.message });
+      } finally {
+        setSending(false);
+      }
       return;
     }
 
@@ -813,6 +882,20 @@ export default function ProjectAgentPage() {
           </div>
         </div>
       </div>
+
+      {multi3PanelOpen && activeMulti3Session && selectedDocId && (
+        <Multi3ComparePanel
+          session={activeMulti3Session}
+          documentId={selectedDocId}
+          onClose={() => setMulti3PanelOpen(false)}
+          onAccepted={(session) => {
+            setActiveMulti3Session(session);
+            setMulti3PanelOpen(false);
+            toast.success('Versão vencedora aplicada ao documento!');
+          }}
+          onSessionUpdate={setActiveMulti3Session}
+        />
+      )}
     </div>
   );
 }

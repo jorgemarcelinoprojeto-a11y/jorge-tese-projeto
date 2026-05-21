@@ -20,6 +20,9 @@ import { VersionHistory } from '@/components/thesis/version-history';
 import { AIErrorBanner } from '@/components/ai-error-banner';
 import { classifyAIError } from '@/lib/ai-error-message';
 import { cancelJobRequest } from '@/components/jobs-status-button';
+import { Multi3ComparePanel } from '@/components/multi-ai/multi3-compare-panel';
+import { parseMulti3Command, buildMulti3ApiBody, pollMulti3Session } from '@/lib/agent/multi3-client';
+import type { Multi3Session } from '@/lib/multi-ai/types';
 
 type ChapterVersion = {
   id: string;
@@ -29,6 +32,7 @@ type ChapterVersion = {
   isCurrent: boolean;
   pages: number | null;
   parentVersionId: string | null;
+  metadata?: Record<string, unknown>;
 };
 
 type Chapter = {
@@ -76,6 +80,8 @@ type ChatMessage = {
   pendingEditPrompt?: string;
   startedAt?: string;
   startVersionNumber?: number;
+  multi3SessionId?: string;
+  multi3Phase?: 'running' | 'compare' | 'accepted';
 };
 
 type SlashCommand = {
@@ -95,6 +101,7 @@ const COMMANDS: SlashCommand[] = [
   { name: '/revisar',   args: '',             example: '/revisar',                               description: 'Verifica se leis citadas continuam vigentes',              icon: <SearchCheck    className="h-4 w-4" />, color: 'text-yellow-400' },
   { name: '/comparar',  args: '[v1] [v2]',    example: '/comparar 1 atual',                      description: 'Compara duas versões (padrão: original vs atual)',         icon: <ArrowLeftRight className="h-4 w-4" />, color: 'text-blue-400' },
   { name: '/todos',     args: '',             example: '/todos',                                 description: 'Executa em sequência: traduzir pt → adaptar simplificado → revisar leis', icon: <PlayCircle className="h-4 w-4" />, color: 'text-green-400' },
+  { name: '/3',         args: '<ias> <cmd>',  example: '/3 gemini openai claude /ajustar expandir conclusão', description: '3 IAs em paralelo → comparação → juiz escolhe a melhor', icon: <Cpu className="h-4 w-4" />, color: 'text-indigo-400' },
   { name: '/limpar',    args: '',             example: '/limpar',                                description: 'Limpa a conversa',                                         icon: <Trash2        className="h-4 w-4" />, color: 'text-gray-400' },
 ];
 
@@ -145,6 +152,9 @@ export default function AgentModePage() {
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffLeft, setDiffLeft] = useState<ChapterVersion | null>(null);
   const [diffRight, setDiffRight] = useState<ChapterVersion | null>(null);
+
+  const [activeMulti3Session, setActiveMulti3Session] = useState<Multi3Session | null>(null);
+  const [multi3PanelOpen, setMulti3PanelOpen] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -841,11 +851,122 @@ export default function AgentModePage() {
     const trimmed = raw.trim();
     if (!trimmed) return;
 
+    // Multi-IA follow-up commands (escolher/decidir) — before append user message
+    const multi3Follow = parseMulti3Command(trimmed);
+    if (multi3Follow.kind === 'choose' && activeMulti3Session) {
+      appendMessage({ role: 'user', content: trimmed });
+      setInput('');
+      try {
+        const res = await fetch(`/api/chapters/${chapterId}/multi3/${activeMulti3Session.id}/accept`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: multi3Follow.provider }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        setActiveMulti3Session(data.session);
+        appendMessage({
+          role: 'assistant',
+          content: `Versão ${multi3Follow.provider} aceita como atual.`,
+          status: 'success',
+          multi3Phase: 'accepted',
+        });
+        await refreshVersions();
+        setMulti3PanelOpen(false);
+      } catch (e: any) {
+        appendMessage({ role: 'system', content: e.message, status: 'error' });
+      }
+      return;
+    }
+    if (multi3Follow.kind === 'decide' && activeMulti3Session) {
+      appendMessage({ role: 'user', content: trimmed });
+      setInput('');
+      try {
+        const res = await fetch(`/api/chapters/${chapterId}/multi3/${activeMulti3Session.id}/judge`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ judgeProvider: multi3Follow.judgeProvider }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        setActiveMulti3Session(data.session);
+        appendMessage({
+          role: 'assistant',
+          content: `Juiz (${multi3Follow.judgeProvider}) recomenda: ${data.session.winnerProvider}. ${data.session.judgeReasoning || ''}`,
+          status: 'success',
+          multi3Phase: 'compare',
+        });
+      } catch (e: any) {
+        appendMessage({ role: 'system', content: e.message, status: 'error' });
+      }
+      return;
+    }
+
     appendMessage({ role: 'user', content: trimmed });
     setInput('');
 
     if (!selectedVersionId || !currentVersion) {
       appendMessage({ role: 'system', content: 'Selecione uma versão primeiro.', status: 'error' });
+      return;
+    }
+
+    // Multi-IA start: /3 or /todos /3
+    const multi3Start = parseMulti3Command(trimmed);
+    if (multi3Start.kind === 'start') {
+      setSending(true);
+      const asstId = appendMessage({
+        role: 'assistant',
+        content: `Multi-IA iniciada (${multi3Start.providers.join(', ')}) — ${multi3Start.command}${multi3Start.args ? ` ${multi3Start.args}` : ''}`,
+        status: 'running',
+        command: '/3',
+        multi3Phase: 'running',
+      });
+      try {
+        const models: Partial<Record<AIProvider, string>> = {};
+        for (const p of multi3Start.providers) {
+          models[p] = settings?.models?.[p]?.[0] || selectedModel;
+        }
+        const res = await fetch(`/api/chapters/${chapterId}/multi3`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(buildMulti3ApiBody(multi3Start, selectedVersionId, models)),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Falha ao iniciar Multi-IA');
+
+        const sessionId = data.session.id;
+        updateMessage(asstId, { multi3SessionId: sessionId });
+
+        const finalSession = await pollMulti3Session(
+          `/api/chapters/${chapterId}/multi3/${sessionId}`,
+          (s) => {
+            setActiveMulti3Session(s);
+            updateMessage(asstId, {
+              content: `Multi-IA: ${s.status} — ${s.candidates.filter((c: any) => c.status === 'completed').length}/${s.providers.length} concluídas`,
+            });
+          }
+        );
+
+        setActiveMulti3Session(finalSession);
+        setMulti3PanelOpen(true);
+        await refreshVersions();
+
+        if (finalSession.status === 'awaiting_human') {
+          updateMessage(asstId, {
+            status: 'success',
+            content: `Comparação pronta. Juiz recomenda: ${finalSession.winnerProvider}. ${finalSession.judgeReasoning || ''}`,
+            multi3Phase: 'compare',
+            multi3SessionId: sessionId,
+          });
+          toast.success('Multi-IA concluída — abra o painel de comparação');
+        } else if (finalSession.status === 'failed') {
+          updateMessage(asstId, { status: 'error', content: 'Multi-IA falhou.' });
+        }
+      } catch (e: any) {
+        updateMessage(asstId, { status: 'error', content: e.message });
+      } finally {
+        setSending(false);
+      }
       return;
     }
 
@@ -1393,6 +1514,21 @@ export default function AgentModePage() {
           rightVersionId={diffRight.id}
           rightVersionNumber={diffRight.versionNumber}
           rightLabel={diffRight.isCurrent ? 'Atual' : diffRight.createdByOperation}
+        />
+      )}
+
+      {multi3PanelOpen && activeMulti3Session && (
+        <Multi3ComparePanel
+          session={activeMulti3Session}
+          chapterId={chapterId}
+          onClose={() => setMulti3PanelOpen(false)}
+          onAccepted={async (session) => {
+            setActiveMulti3Session(session);
+            setMulti3PanelOpen(false);
+            await refreshVersions();
+            toast.success('Versão vencedora ativada!');
+          }}
+          onSessionUpdate={setActiveMulti3Session}
         />
       )}
     </div>

@@ -113,3 +113,52 @@ async function chatGrok(req: AgentChatRequest, apiKey: string): Promise<string> 
   });
   return response.choices[0]?.message?.content ?? '';
 }
+
+/** Long-form chat for whole-document processing (higher token limits). */
+export async function chatWithAgentLong(req: AgentChatRequest): Promise<string> {
+  const apiKey = getApiKey(req.provider);
+  if (!apiKey) {
+    throw new Error(`API key not configured for provider: ${req.provider}`);
+  }
+
+  switch (req.provider) {
+    case 'openai':
+    case 'grok': {
+      const client = new OpenAI({
+        apiKey,
+        baseURL: req.provider === 'grok' ? 'https://api.x.ai/v1' : undefined,
+      });
+      const response = await client.chat.completions.create({
+        model: req.model,
+        messages: [
+          { role: 'system', content: req.systemPrompt },
+          ...req.history.map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+          { role: 'user' as const, content: req.userMessage },
+        ],
+        ...(req.provider === 'grok' || !isOpenAIGpt5Family(req.model) ? { temperature: 0.3 } : {}),
+        max_tokens: 32000,
+      });
+      return response.choices[0]?.message?.content ?? '';
+    }
+    case 'gemini': {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: req.model, systemInstruction: req.systemPrompt });
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: req.userMessage }] }],
+        generationConfig: { temperature: 0.3, maxOutputTokens: 65536 },
+      });
+      return result.response.text();
+    }
+    case 'anthropic': {
+      const client = new Anthropic({ apiKey });
+      const response = await client.messages.create({
+        model: req.model,
+        max_tokens: 32000,
+        system: req.systemPrompt,
+        messages: [{ role: 'user' as const, content: req.userMessage }],
+      });
+      const block = response.content.find((c: any) => c.type === 'text');
+      return (block as any)?.text ?? '';
+    }
+  }
+}
