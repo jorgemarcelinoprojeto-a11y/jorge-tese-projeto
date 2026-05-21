@@ -4,11 +4,15 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { GitBranch, CheckCircle2, Circle, ArrowLeftRight, Eye, Clock, Trash2, Cpu, ChevronDown, ChevronRight } from 'lucide-react';
+import {
+  GitBranch, CheckCircle2, Circle, ArrowLeftRight, Eye, Clock, Trash2,
+  Cpu, ChevronDown, ChevronRight, Trophy, MessageSquare, ExternalLink,
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { VersionDiff } from './version-diff';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import type { Multi3Session, Multi3Candidate } from '@/lib/multi-ai/types';
 
 type ChapterVersion = {
   id: string;
@@ -25,7 +29,17 @@ type VersionHistoryProps = {
   versions: ChapterVersion[];
   chapterId: string;
   showHeader?: boolean;
+  multi3Sessions?: Multi3Session[];
   onVersionDeleted?: (versionId: string) => void;
+  onOpenMulti3Session?: (session: Multi3Session) => void;
+  onReprocessMulti3Session?: (session: Multi3Session) => void;
+};
+
+const PROVIDER_LABEL: Record<string, string> = {
+  openai: 'OpenAI',
+  gemini: 'Google Gemini',
+  grok: 'xAI Grok',
+  anthropic: 'Anthropic Claude',
 };
 
 const OPERATION_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -41,13 +55,35 @@ function getOpConfig(operation: string) {
   return OPERATION_CONFIG[operation] ?? { label: operation, color: 'text-gray-400', bg: 'bg-gray-500/15 border-gray-500/30' };
 }
 
-export function VersionHistory({ versions, chapterId, showHeader = true, onVersionDeleted }: VersionHistoryProps) {
+function versionsForBranch(
+  versions: ChapterVersion[],
+  sessionId: string,
+  branchIndex: number
+): ChapterVersion[] {
+  return versions
+    .filter((v) => {
+      const m = v.metadata as Record<string, unknown> | undefined;
+      return m?.multi3SessionId === sessionId && (m?.multi3BranchIndex ?? 0) === branchIndex;
+    })
+    .sort((a, b) => a.versionNumber - b.versionNumber);
+}
+
+export function VersionHistory({
+  versions,
+  chapterId,
+  showHeader = true,
+  multi3Sessions = [],
+  onVersionDeleted,
+  onOpenMulti3Session,
+  onReprocessMulti3Session,
+}: VersionHistoryProps) {
   const router = useRouter();
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffLeft, setDiffLeft] = useState<ChapterVersion | null>(null);
   const [diffRight, setDiffRight] = useState<ChapterVersion | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [expandedTexts, setExpandedTexts] = useState<Set<string>>(new Set());
 
   const toggleGroup = (key: string) => {
     setCollapsedGroups((prev) => {
@@ -58,10 +94,16 @@ export function VersionHistory({ versions, chapterId, showHeader = true, onVersi
     });
   };
 
+  const toggleText = (key: string) => {
+    setExpandedTexts((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   const handleDeleteVersion = async (version: ChapterVersion) => {
-    if (version.createdByOperation === 'upload' && versions.length > 1) {
-      // Allow deleting original only if there are others, but warn
-    }
     if (!confirm(`Excluir versão v${version.versionNumber} (${version.createdByOperation})? Esta ação não pode ser desfeita.`)) return;
     try {
       setDeletingId(version.id);
@@ -79,7 +121,30 @@ export function VersionHistory({ versions, chapterId, showHeader = true, onVersi
     }
   };
 
-  if (versions.length === 0) {
+  const sorted = [...versions].sort((a, b) => a.versionNumber - b.versionNumber);
+  const originalVersion = sorted[0];
+  const currentVersion = sorted.find((v) => v.isCurrent) ?? sorted[sorted.length - 1];
+
+  const multi3SessionIds = new Set(multi3Sessions.map((s) => s.id));
+  const singles = sorted.filter((v) => {
+    const sid = (v.metadata as Record<string, unknown> | undefined)?.multi3SessionId as string | undefined;
+    return !sid || !multi3SessionIds.has(sid);
+  });
+
+  type TimelineEntry =
+    | { type: 'single'; version: ChapterVersion; at: number }
+    | { type: 'multi3'; session: Multi3Session; at: number };
+
+  const timeline: TimelineEntry[] = [
+    ...singles.map((v) => ({ type: 'single' as const, version: v, at: new Date(v.createdAt).getTime() })),
+    ...multi3Sessions.map((s) => ({
+      type: 'multi3' as const,
+      session: s,
+      at: new Date(s.createdAt).getTime(),
+    })),
+  ].sort((a, b) => a.at - b.at);
+
+  if (timeline.length === 0) {
     return (
       <Card className="bg-gradient-to-br from-white/[0.07] to-white/[0.02] backdrop-blur-xl border-white/10">
         {showHeader && (
@@ -98,59 +163,24 @@ export function VersionHistory({ versions, chapterId, showHeader = true, onVersi
     );
   }
 
-  // Sort versions chronologically
-  const sorted = [...versions].sort((a, b) => a.versionNumber - b.versionNumber);
-  const originalVersion = sorted[0];
-  const currentVersion = sorted.find((v) => v.isCurrent) ?? sorted[sorted.length - 1];
+  const openDiff = (left: ChapterVersion, right: ChapterVersion) => {
+    setDiffLeft(left);
+    setDiffRight(right);
+    setDiffOpen(true);
+  };
 
-  // Group Multi-IA versions by session + branch
-  type GroupedEntry =
-    | { type: 'single'; version: ChapterVersion }
-    | { type: 'multi3'; sessionId: string; command: string; branches: Map<number, ChapterVersion[]> };
-
-  const grouped: GroupedEntry[] = [];
-  const multi3Sessions = new Map<string, { command: string; branches: Map<number, ChapterVersion[]> }>();
-  const consumed = new Set<string>();
-
-  for (const v of sorted) {
-    const meta = v.metadata as Record<string, unknown> | undefined;
-    const sessionId = meta?.multi3SessionId as string | undefined;
-    if (sessionId) {
-      if (!multi3Sessions.has(sessionId)) {
-        multi3Sessions.set(sessionId, {
-          command: (meta?.multi3Command as string) || '/3',
-          branches: new Map(),
-        });
-      }
-      const branch = (meta?.multi3BranchIndex as number) ?? 0;
-      const entry = multi3Sessions.get(sessionId)!;
-      if (!entry.branches.has(branch)) entry.branches.set(branch, []);
-      entry.branches.get(branch)!.push(v);
-      consumed.add(v.id);
-    }
-  }
-
-  for (const v of sorted) {
-    if (consumed.has(v.id)) continue;
-    grouped.push({ type: 'single', version: v });
-  }
-
-  for (const [sessionId, data] of multi3Sessions) {
-    grouped.push({ type: 'multi3', sessionId, command: data.command, branches: data.branches });
-  }
-
-  grouped.sort((a, b) => {
-    const numA = a.type === 'single' ? a.version.versionNumber : Math.min(...[...a.branches.values()].flat().map((v) => v.versionNumber));
-    const numB = b.type === 'single' ? b.version.versionNumber : Math.min(...[...b.branches.values()].flat().map((v) => v.versionNumber));
-    return numA - numB;
-  });
-
-  const renderVersionRow = (version: ChapterVersion, idx: number, sortedList: ChapterVersion[]) => {
+  const renderVersionRow = (
+    version: ChapterVersion,
+    idx: number,
+    sortedList: ChapterVersion[],
+    opts?: { isChosen?: boolean; hideProvider?: boolean }
+  ) => {
     const cfg = getOpConfig(version.createdByOperation);
     const isFirst = version.id === sorted[0]?.id;
     const prevVersion = idx > 0 ? sortedList[idx - 1] : null;
     const meta = version.metadata as Record<string, unknown> | undefined;
     const provider = meta?.multi3Provider as string | undefined;
+    const isChosen = opts?.isChosen ?? meta?.multi3Role === 'winner';
 
     return (
       <div key={version.id} className="relative flex items-start gap-4 py-2.5">
@@ -164,9 +194,11 @@ export function VersionHistory({ versions, chapterId, showHeader = true, onVersi
         <div
           className={cn(
             'flex-1 flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border transition-all cursor-pointer group',
-            version.isCurrent
-              ? 'bg-red-500/[0.08] border-red-500/25 hover:border-red-500/40'
-              : 'bg-white/[0.03] border-white/8 hover:bg-white/[0.06] hover:border-white/15'
+            isChosen
+              ? 'bg-green-500/[0.08] border-green-500/30 hover:border-green-500/45'
+              : version.isCurrent
+                ? 'bg-red-500/[0.08] border-red-500/25 hover:border-red-500/40'
+                : 'bg-white/[0.03] border-white/8 hover:bg-white/[0.06] hover:border-white/15'
           )}
           onClick={() => router.push(`/chapters/${chapterId}/versions/${version.id}`)}
         >
@@ -177,17 +209,25 @@ export function VersionHistory({ versions, chapterId, showHeader = true, onVersi
                 {version.isCurrent && (
                   <Badge className="bg-red-600 text-white text-xs px-1.5 py-0 h-4">Atual</Badge>
                 )}
+                {isChosen && (
+                  <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs px-1.5 py-0 h-4">
+                    <Trophy className="h-3 w-3 mr-1 inline" />
+                    Escolhida
+                  </Badge>
+                )}
                 {isFirst && !version.isCurrent && (
                   <Badge variant="outline" className="text-gray-500 border-gray-700 text-xs px-1.5 py-0 h-4">Original</Badge>
                 )}
                 <Badge className={cn('text-xs border px-1.5 py-0 h-4', cfg.bg, cfg.color)}>{cfg.label}</Badge>
-                {provider && (
+                {!opts?.hideProvider && provider && (
                   <Badge variant="outline" className="text-indigo-400 border-indigo-500/30 text-xs px-1.5 py-0 h-4 capitalize">
-                    {provider}
+                    {PROVIDER_LABEL[provider] || provider}
                   </Badge>
                 )}
-                {meta?.multi3Role === 'winner' && (
-                  <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-xs px-1.5 py-0 h-4">Vencedora</Badge>
+                {meta?.multi3Step && (
+                  <Badge variant="outline" className="text-gray-500 text-xs px-1.5 py-0 h-4">
+                    {String(meta.multi3Step)}
+                  </Badge>
                 )}
               </div>
               <div className="flex items-center gap-2 text-xs text-gray-500">
@@ -223,10 +263,167 @@ export function VersionHistory({ versions, chapterId, showHeader = true, onVersi
     );
   };
 
-  const openDiff = (left: ChapterVersion, right: ChapterVersion) => {
-    setDiffLeft(left);
-    setDiffRight(right);
-    setDiffOpen(true);
+  const renderCandidateText = (session: Multi3Session, candidate: Multi3Candidate) => {
+    const isChosen = candidate.provider === session.winnerProvider;
+    const textKey = `${session.id}-${candidate.provider}`;
+    const expanded = expandedTexts.has(textKey);
+    const displayText =
+      candidate.text ||
+      (candidate.status === 'failed' ? candidate.error || 'Processamento falhou' : '(sem resposta)');
+
+    return (
+      <div
+        key={textKey}
+        className={cn(
+          'rounded-lg border px-3 py-2.5',
+          isChosen
+            ? 'bg-green-500/[0.08] border-green-500/30'
+            : 'bg-white/[0.03] border-white/8'
+        )}
+      >
+        <div className="flex items-center gap-2 flex-wrap mb-2">
+          <Badge variant="outline" className="text-indigo-400 border-indigo-500/30 text-xs capitalize">
+            {PROVIDER_LABEL[candidate.provider] || candidate.provider}
+          </Badge>
+          {isChosen && (
+            <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
+              <Trophy className="h-3 w-3 mr-1 inline" />
+              Escolhida pelo juiz
+            </Badge>
+          )}
+          {candidate.status === 'failed' && (
+            <Badge className="bg-red-500/20 text-red-400 text-xs">Falhou</Badge>
+          )}
+        </div>
+        <p className={cn('text-sm whitespace-pre-wrap', candidate.status === 'failed' ? 'text-red-400' : 'text-gray-300', !expanded && 'line-clamp-6')}>
+          {displayText}
+        </p>
+        {displayText.length > 200 && (
+          <button
+            type="button"
+            className="text-xs text-indigo-400 hover:text-indigo-300 mt-1"
+            onClick={() => toggleText(textKey)}
+          >
+            {expanded ? 'Ver menos' : 'Ver resposta completa'}
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const renderMulti3Session = (session: Multi3Session) => {
+    const groupKey = session.id;
+    const isCollapsed = collapsedGroups.has(groupKey);
+    const completed = session.candidates.filter((c) => c.status === 'completed');
+    const isPerguntar = session.command === '/perguntar';
+    const candidateCount = session.candidates.filter((c) => c.status !== 'failed').length;
+    const isStuck = ['running', 'processing'].includes(session.status) && completed.length === 0;
+    const winnerLabel = session.winnerProvider
+      ? PROVIDER_LABEL[session.winnerProvider] || session.winnerProvider
+      : null;
+
+    return (
+      <div key={groupKey} className="rounded-lg border border-indigo-500/25 bg-indigo-500/[0.05] p-2 my-2">
+        <button
+          type="button"
+          className="flex items-center gap-2 w-full px-2 py-1.5 text-left text-sm text-indigo-300 hover:text-indigo-200"
+          onClick={() => toggleGroup(groupKey)}
+        >
+          {isCollapsed ? <ChevronRight className="h-4 w-4 shrink-0" /> : <ChevronDown className="h-4 w-4 shrink-0" />}
+          {isPerguntar ? <MessageSquare className="h-4 w-4 shrink-0" /> : <Cpu className="h-4 w-4 shrink-0" />}
+          <span className="font-medium min-w-0 truncate">
+            Multi-IA {session.command}
+            {session.commandArgs ? ` — ${session.commandArgs}` : ''}
+          </span>
+          {winnerLabel && (
+            <Badge className="bg-green-500/15 text-green-400 border-green-500/30 text-xs shrink-0">
+              Escolhida: {winnerLabel}
+            </Badge>
+          )}
+          <Badge variant="outline" className="text-xs border-indigo-500/30 text-indigo-400 shrink-0 ml-auto">
+            {candidateCount} {isPerguntar ? 'respostas' : 'IAs'}
+          </Badge>
+        </button>
+
+        {!isCollapsed && (
+          <div className="px-2 pb-2 space-y-3 mt-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              <Clock className="h-3 w-3" />
+              {new Date(session.createdAt).toLocaleDateString('pt-BR', {
+                day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+              })}
+              {session.judgeProvider && (
+                <span>· Juiz: {PROVIDER_LABEL[session.judgeProvider] || session.judgeProvider}</span>
+              )}
+            </div>
+
+            {session.judgeReasoning && (
+              <p className="text-xs text-gray-400 bg-yellow-500/[0.06] border border-yellow-500/20 rounded-md px-3 py-2">
+                {session.judgeReasoning}
+              </p>
+            )}
+
+            {session.candidates.map((candidate) => {
+              const branchIdx = candidate.branchIndex ?? 0;
+              const branchVersions = versionsForBranch(sorted, session.id, branchIdx);
+              const isChosenBranch = candidate.provider === session.winnerProvider;
+
+              if (isPerguntar || branchVersions.length === 0) {
+                return renderCandidateText(session, candidate);
+              }
+
+              return (
+                <div key={candidate.provider} className="border-l-2 border-indigo-500/25 pl-3 space-y-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <p className="text-xs text-indigo-400/90 font-medium capitalize">
+                      {PROVIDER_LABEL[candidate.provider] || candidate.provider}
+                    </p>
+                    {isChosenBranch && (
+                      <Badge className="bg-green-500/15 text-green-400 border-green-500/30 text-[10px] h-4">
+                        Escolhida
+                      </Badge>
+                    )}
+                  </div>
+                  {branchVersions.map((v, i, list) => {
+                    const idx = sorted.findIndex((x) => x.id === v.id);
+                    const isFinalChosen =
+                      isChosenBranch &&
+                      (v.id === session.winnerVersionId || v.id === candidate.versionId);
+                    return renderVersionRow(v, idx >= 0 ? idx : i, list, {
+                      isChosen: isFinalChosen,
+                      hideProvider: true,
+                    });
+                  })}
+                </div>
+              );
+            })}
+
+            {onOpenMulti3Session && completed.length > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full text-xs border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/10"
+                onClick={() => onOpenMulti3Session(session)}
+              >
+                <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                Abrir comparação completa
+              </Button>
+            )}
+
+            {isStuck && onReprocessMulti3Session && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full text-xs border-amber-500/30 text-amber-300 hover:bg-amber-500/10"
+                onClick={() => onReprocessMulti3Session(session)}
+              >
+                Reprocessar Multi-IA
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -241,6 +438,11 @@ export function VersionHistory({ versions, chapterId, showHeader = true, onVersi
                 <Badge variant="secondary" className="bg-white/10 text-gray-400 text-xs ml-1">
                   {versions.length}
                 </Badge>
+                {multi3Sessions.length > 0 && (
+                  <Badge variant="secondary" className="bg-indigo-500/15 text-indigo-400 text-xs">
+                    {multi3Sessions.length} Multi-IA
+                  </Badge>
+                )}
               </CardTitle>
               {versions.length >= 2 && (
                 <Button
@@ -258,63 +460,23 @@ export function VersionHistory({ versions, chapterId, showHeader = true, onVersi
         )}
 
         <CardContent className="pt-0">
-          {/* Timeline */}
           <div className="relative">
-            {/* Vertical line */}
-            {sorted.length > 1 && (
+            {timeline.length > 1 && (
               <div className="absolute left-[19px] top-5 bottom-5 w-px bg-white/10" />
             )}
-
             <div className="space-y-1">
-              {grouped.map((entry) => {
+              {timeline.map((entry) => {
                 if (entry.type === 'single') {
                   const idx = sorted.findIndex((v) => v.id === entry.version.id);
-                  return renderVersionRow(entry.version, idx, sorted);
+                  return renderVersionRow(entry.version, idx >= 0 ? idx : 0, sorted);
                 }
-
-                const groupKey = entry.sessionId;
-                const isCollapsed = collapsedGroups.has(groupKey);
-                const allVersions = [...entry.branches.values()].flat().sort((a, b) => a.versionNumber - b.versionNumber);
-
-                return (
-                  <div key={groupKey} className="rounded-lg border border-indigo-500/20 bg-indigo-500/[0.04] p-2 my-2">
-                    <button
-                      type="button"
-                      className="flex items-center gap-2 w-full px-2 py-1.5 text-left text-sm text-indigo-300 hover:text-indigo-200"
-                      onClick={() => toggleGroup(groupKey)}
-                    >
-                      {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                      <Cpu className="h-4 w-4" />
-                      <span className="font-medium">Multi-IA {entry.command}</span>
-                      <Badge variant="outline" className="text-xs border-indigo-500/30 text-indigo-400">
-                        {allVersions.length} versões · {entry.branches.size} IAs
-                      </Badge>
-                    </button>
-                    {!isCollapsed && (
-                      <div className="pl-4 space-y-2 mt-1">
-                        {[...entry.branches.entries()].map(([branchIdx, branchVersions]) => {
-                          const provider = (branchVersions[0]?.metadata as Record<string, unknown>)?.multi3Provider as string;
-                          return (
-                            <div key={branchIdx} className="border-l border-indigo-500/20 pl-3">
-                              <p className="text-xs text-indigo-400/80 mb-1 capitalize font-medium">{provider || `IA ${branchIdx + 1}`}</p>
-                              {branchVersions.sort((a, b) => a.versionNumber - b.versionNumber).map((v, i, list) => {
-                                const idx = sorted.findIndex((x) => x.id === v.id);
-                                return renderVersionRow(v, idx >= 0 ? idx : i, list);
-                              })}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                );
+                return renderMulti3Session(entry.session);
               })}
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Diff Dialog */}
       {diffLeft && diffRight && (
         <VersionDiff
           open={diffOpen}

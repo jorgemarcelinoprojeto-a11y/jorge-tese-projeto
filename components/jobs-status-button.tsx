@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   Activity, Loader2, CheckCircle2, XCircle, Languages, Sliders, Wand2,
-  Sparkles, SearchCheck, ExternalLink, FileText, ChevronRight, X, Ban
+  Sparkles, SearchCheck, ExternalLink, FileText, ChevronRight, X, Ban, GitCompare
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { classifyAIError } from '@/lib/ai-error-message';
@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 
 type ActiveJob = {
   id: string;
-  type: 'translate' | 'adjust' | 'adapt' | 'improve' | 'norms-update' | 'chapter-operation';
+  type: 'translate' | 'adjust' | 'adapt' | 'improve' | 'norms-update' | 'chapter-operation' | 'multi3';
   operation?: string;
   status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
   progress: number;
@@ -58,9 +58,14 @@ const OP_META: Record<string, { label: string; icon: React.ReactNode; color: str
   improve:       { label: 'Melhoria',  icon: <Sparkles    className="h-3.5 w-3.5" />, color: 'text-green-400' },
   'norms-update':{ label: 'Revisão de normas', icon: <SearchCheck className="h-3.5 w-3.5" />, color: 'text-yellow-400' },
   update:        { label: 'Revisão de normas', icon: <SearchCheck className="h-3.5 w-3.5" />, color: 'text-yellow-400' },
+  multi3:        { label: 'Multi-IA /3', icon: <GitCompare className="h-3.5 w-3.5" />, color: 'text-indigo-400' },
 };
 
 function metaFor(job: ActiveJob) {
+  if (job.type === 'multi3') {
+    const cmd = job.operation?.replace('/', '') || 'comando';
+    return { label: `Multi-IA /3 (${cmd})`, icon: <GitCompare className="h-3.5 w-3.5" />, color: 'text-indigo-400' };
+  }
   const key = job.type === 'chapter-operation' ? (job.operation || 'unknown') : job.type;
   return OP_META[key] ?? { label: key, icon: <FileText className="h-3.5 w-3.5" />, color: 'text-gray-400' };
 }

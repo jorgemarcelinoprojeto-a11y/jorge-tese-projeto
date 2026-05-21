@@ -7,6 +7,7 @@ import { AdaptationSuggestion } from './types';
 import { extractDocumentStructure } from '@/lib/improvement/document-analyzer';
 import { isGemini429, parseGeminiRetryDelayMs } from '@/lib/ai/gemini-retry';
 import { isOpenAIGpt5Family } from '@/lib/ai/openai-compat';
+import { isQuotaExhausted } from '@/lib/ai-error-message';
 import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { randomUUID } from 'crypto';
@@ -112,26 +113,22 @@ export async function analyzeDocumentForAdaptation(
  */
 function isRetryableError(error: any): boolean {
   if (!error) return false;
-  
-  // Check for OpenAI/Grok rate limit or quota errors
-  if (error.status === 429 || error.code === 'insufficient_quota' || error.code === 'rate_limit_exceeded') {
-    return true;
-  }
-  // Gemini 429 (message-based)
-  if (error.message?.includes('429') || error.message?.includes('quota') || error.message?.includes('Too Many Requests')) {
-    return true;
-  }
-  
-  // Check for server errors
-  if (error.status >= 500 && error.status < 600) {
-    return true;
-  }
-  
-  // Check for network errors
+
+  if (isQuotaExhausted(error)) return false;
+
+  // Rate limit temporário (não quota/billing)
+  if (error.status === 429 && !isQuotaExhausted(error)) return true;
+  if (error.code === 'rate_limit_exceeded') return true;
+
+  if (isGemini429(error) && !isQuotaExhausted(error)) return true;
+  if (error.message?.includes('Too Many Requests') && !isQuotaExhausted(error)) return true;
+
+  if (error.status >= 500 && error.status < 600) return true;
+
   if (error.message?.includes('ECONNRESET') || error.message?.includes('ETIMEDOUT') || error.message?.includes('ENOTFOUND')) {
     return true;
   }
-  
+
   return false;
 }
 
@@ -258,26 +255,11 @@ async function analyzeBatch(
         await new Promise(resolve => setTimeout(resolve, delayMs));
         continue; // Try again
       } else {
-        // Not retryable or max retries reached
+        const msg = error.message || error.code || 'Unknown error';
         if (attempt >= maxRetries) {
-          console.error(`[ADAPT] ❌ Falhou após ${maxRetries} tentativas: ${error.message || error.code || 'Unknown error'}`);
-          console.error(`[ADAPT]     → Salvando progresso parcial e continuando...`);
-          
-          // Save partial progress before failing
-          if (onSavePartial) {
-            try {
-              await onSavePartial();
-              console.log(`[ADAPT]     → Progresso parcial salvo`);
-            } catch (saveError: any) {
-              console.error(`[ADAPT]     → Erro ao salvar progresso parcial:`, saveError.message);
-            }
-          }
-          
-          // Return empty array to continue with partial results
-          return [];
+          console.error(`[ADAPT] ❌ Falhou após ${maxRetries} tentativas: ${msg}`);
+          throw new Error(msg);
         }
-        
-        // Non-retryable error, throw immediately
         throw error;
       }
     }

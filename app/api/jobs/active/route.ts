@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { jsonNoStore } from '@/lib/json-no-store-response';
 import { isCancellationErrorMessage } from '@/lib/job-cancellation';
+import { getMulti3FailureMessage } from '@/lib/multi-ai/errors';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -12,8 +13,8 @@ export const runtime = 'nodejs';
  */
 type ActiveJob = {
   id: string;
-  type: 'translate' | 'adjust' | 'adapt' | 'improve' | 'norms-update' | 'chapter-operation';
-  operation?: string;        // for chapter-operation: 'translate' | 'improve' | ...
+  type: 'translate' | 'adjust' | 'adapt' | 'improve' | 'norms-update' | 'chapter-operation' | 'multi3';
+  operation?: string;
   status: 'pending' | 'running' | 'completed' | 'error' | 'cancelled';
   progress: number;          // 0-100
   errorMessage?: string;
@@ -30,6 +31,28 @@ type ActiveJob = {
 };
 
 const RECENT_WINDOW_HOURS = 6;
+
+function normalizeMulti3Status(raw: string, judgeReasoning?: string | null): ActiveJob['status'] {
+  if (isCancellationErrorMessage(judgeReasoning)) return 'cancelled';
+  const s = (raw || '').toLowerCase();
+  if (s === 'accepted' || s === 'awaiting_human') return 'completed';
+  if (s === 'failed') return 'error';
+  return 'running';
+}
+
+function multi3Progress(session: Record<string, unknown>): number {
+  const candidates = (session.candidates as any[]) || [];
+  const total = candidates.length || 3;
+  const done = candidates.filter((c) => c.status === 'completed').length;
+  const failed = candidates.filter((c) => c.status === 'failed').length;
+  const status = String(session.status || 'running');
+
+  if (status === 'accepted' || status === 'awaiting_human') return 100;
+  if (status === 'failed') return Math.min(100, Math.round(((done + failed) / total) * 100));
+  if (status === 'judging') return 90;
+  if (status === 'candidates_ready') return 85;
+  return Math.round((done / total) * 80);
+}
 
 function normalizeStatus(raw: string, errorMessage?: string | null): ActiveJob['status'] {
   // Cancellation is encoded as status='error' + a marker in errorMessage,
@@ -271,6 +294,88 @@ export async function GET(_req: NextRequest) {
       }
     } catch (e) {
       console.error('[JOBS] norm_update_jobs error:', e);
+    }
+
+    // 7. Multi-IA sessions (/3)
+    try {
+      const { data: multi3Rows, error } = await supabase
+        .from('multi_ai_sessions')
+        .select('id, status, command, command_args, candidates, target_type, target_id, judge_reasoning, created_at, completed_at')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) console.error('[JOBS] multi_ai_sessions select error:', error);
+
+      const chapterIds = [...new Set((multi3Rows ?? []).filter((r: any) => r.target_type === 'chapter').map((r: any) => r.target_id))];
+      const documentIds = [...new Set((multi3Rows ?? []).filter((r: any) => r.target_type === 'document').map((r: any) => r.target_id))];
+
+      const chapterTitles = new Map<string, string>();
+      const documentMeta = new Map<string, { title?: string; projectId?: string }>();
+
+      if (chapterIds.length > 0) {
+        const { data: chapters } = await supabase
+          .from('chapters')
+          .select('id, title, thesis_id')
+          .in('id', chapterIds);
+        for (const ch of chapters ?? []) {
+          chapterTitles.set((ch as any).id, (ch as any).title);
+        }
+      }
+
+      if (documentIds.length > 0) {
+        const { data: docs } = await supabase
+          .from('documents')
+          .select('id, title, project_id')
+          .in('id', documentIds);
+        for (const d of docs ?? []) {
+          documentMeta.set((d as any).id, { title: (d as any).title, projectId: (d as any).project_id });
+        }
+      }
+
+      for (const row of multi3Rows ?? []) {
+        const r = row as any;
+        const isChapter = r.target_type === 'chapter';
+        const candidates = (r.candidates as any[]) || [];
+        const status = normalizeMulti3Status(r.status, r.judge_reasoning);
+        const errMsg = status === 'error' || status === 'cancelled'
+          ? (isCancellationErrorMessage(r.judge_reasoning)
+            ? r.judge_reasoning
+            : getMulti3FailureMessage({
+                status: r.status,
+                judgeReasoning: r.judge_reasoning,
+                candidates,
+              }))
+          : undefined;
+
+        jobs.push({
+          id: r.id,
+          type: 'multi3',
+          operation: r.command,
+          status,
+          progress: multi3Progress(r),
+          errorMessage: errMsg,
+          createdAt: r.created_at,
+          completedAt: r.completed_at,
+          target: isChapter
+            ? {
+                kind: 'chapter',
+                id: r.target_id,
+                title: chapterTitles.get(r.target_id),
+              }
+            : {
+                kind: 'document',
+                id: r.target_id,
+                title: documentMeta.get(r.target_id)?.title,
+                projectId: documentMeta.get(r.target_id)?.projectId,
+              },
+          resultHref: isChapter
+            ? `/chapters/${r.target_id}/agent`
+            : `/projects/${documentMeta.get(r.target_id)?.projectId || ''}/agent`,
+        });
+      }
+    } catch (e) {
+      console.error('[JOBS] multi_ai_sessions error:', e);
     }
 
     jobs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

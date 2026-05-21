@@ -11,7 +11,7 @@ import {
   ArrowLeft, Send, FileText, PanelLeftClose, PanelLeftOpen, Sparkles,
   Loader2, Trash2, Languages, Wand2, Sliders, SearchCheck, ArrowLeftRight,
   AlertCircle, Bot, User as UserIcon, Download, BookOpen,
-  ChevronDown, Cpu, Ban, History, PlayCircle, ChevronUp, X, Edit3, Save,
+  ChevronDown, Cpu, Ban, History, PlayCircle, ChevronUp, X, Edit3, Save, Terminal,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -21,7 +21,11 @@ import { AIErrorBanner } from '@/components/ai-error-banner';
 import { classifyAIError } from '@/lib/ai-error-message';
 import { cancelJobRequest } from '@/components/jobs-status-button';
 import { Multi3ComparePanel } from '@/components/multi-ai/multi3-compare-panel';
-import { parseMulti3Command, buildMulti3ApiBody, pollMulti3Session } from '@/lib/agent/multi3-client';
+import { Multi3CommandHelp } from '@/components/multi-ai/multi3-command-help';
+import { parseMulti3Command, buildMulti3ApiBody, pollMulti3Session, startMulti3WithRun, formatMulti3Progress, getMulti3FailureMessage, explainMulti3ParseFailure } from '@/lib/agent/multi3-client';
+import { resolveMulti3Models } from '@/lib/multi-ai/models';
+import { getAIErrorMessage } from '@/lib/ai-error-message';
+import { MULTI3_SHORT_DESCRIPTION } from '@/lib/agent/command-reference';
 import type { Multi3Session } from '@/lib/multi-ai/types';
 
 type ChapterVersion = {
@@ -101,7 +105,7 @@ const COMMANDS: SlashCommand[] = [
   { name: '/revisar',   args: '',             example: '/revisar',                               description: 'Verifica se leis citadas continuam vigentes',              icon: <SearchCheck    className="h-4 w-4" />, color: 'text-yellow-400' },
   { name: '/comparar',  args: '[v1] [v2]',    example: '/comparar 1 atual',                      description: 'Compara duas versões (padrão: original vs atual)',         icon: <ArrowLeftRight className="h-4 w-4" />, color: 'text-blue-400' },
   { name: '/todos',     args: '',             example: '/todos',                                 description: 'Executa em sequência: traduzir pt → adaptar simplificado → revisar leis', icon: <PlayCircle className="h-4 w-4" />, color: 'text-green-400' },
-  { name: '/3',         args: '<ias> <cmd>',  example: '/3 gemini openai claude /ajustar expandir conclusão', description: '3 IAs em paralelo → comparação → juiz escolhe a melhor', icon: <Cpu className="h-4 w-4" />, color: 'text-indigo-400' },
+  { name: '/3',         args: '<ias> <cmd>',  example: '/3 gemini openai claude /ajustar expandir conclusão', description: MULTI3_SHORT_DESCRIPTION, icon: <Cpu className="h-4 w-4" />, color: 'text-indigo-400' },
   { name: '/limpar',    args: '',             example: '/limpar',                                description: 'Limpa a conversa',                                         icon: <Trash2        className="h-4 w-4" />, color: 'text-gray-400' },
 ];
 
@@ -155,6 +159,7 @@ export default function AgentModePage() {
 
   const [activeMulti3Session, setActiveMulti3Session] = useState<Multi3Session | null>(null);
   const [multi3PanelOpen, setMulti3PanelOpen] = useState(false);
+  const [multi3Sessions, setMulti3Sessions] = useState<Multi3Session[]>([]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -296,6 +301,12 @@ export default function AgentModePage() {
     );
   }, [settings]);
 
+  useEffect(() => {
+    if (showHistory) {
+      refreshMulti3Sessions();
+    }
+  }, [showHistory, chapterId]);
+
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
   const refreshVersions = async (): Promise<ChapterVersion[]> => {
@@ -308,6 +319,31 @@ export default function AgentModePage() {
       return list;
     } catch {
       return [];
+    }
+  };
+
+  const refreshMulti3Sessions = async (): Promise<Multi3Session[]> => {
+    try {
+      const res = await fetch(`/api/chapters/${chapterId}/multi3`, { cache: 'no-store' });
+      if (!res.ok) return [];
+      const data = await res.json();
+      const list: Multi3Session[] = data.sessions || [];
+      setMulti3Sessions(list);
+      return list;
+    } catch {
+      return [];
+    }
+  };
+
+  const openMulti3SessionFromHistory = async (session: Multi3Session) => {
+    try {
+      const res = await fetch(`/api/chapters/${chapterId}/multi3/${session.id}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error('Sessão não encontrada');
+      const data = await res.json();
+      setActiveMulti3Session(data.session);
+      setMulti3PanelOpen(true);
+    } catch (e: any) {
+      toast.error(e.message || 'Erro ao abrir sessão Multi-IA');
     }
   };
 
@@ -871,7 +907,7 @@ export default function AgentModePage() {
           status: 'success',
           multi3Phase: 'accepted',
         });
-        await refreshVersions();
+        await Promise.all([refreshVersions(), refreshMulti3Sessions()]);
         setMulti3PanelOpen(false);
       } catch (e: any) {
         appendMessage({ role: 'system', content: e.message, status: 'error' });
@@ -890,11 +926,14 @@ export default function AgentModePage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
         setActiveMulti3Session(data.session);
+        await Promise.all([refreshVersions(), refreshMulti3Sessions()]);
         appendMessage({
           role: 'assistant',
-          content: `Juiz (${multi3Follow.judgeProvider}) recomenda: ${data.session.winnerProvider}. ${data.session.judgeReasoning || ''}`,
+          content: data.session.status === 'accepted' && data.session.command !== '/perguntar'
+            ? `Re-juizado com ${multi3Follow.judgeProvider}. Versão ${data.session.winnerProvider} ativada. ${data.session.judgeReasoning || ''}`
+            : `Juiz (${multi3Follow.judgeProvider}) recomenda: ${data.session.winnerProvider}. ${data.session.judgeReasoning || ''}`,
           status: 'success',
-          multi3Phase: 'compare',
+          multi3Phase: data.session.status === 'accepted' ? 'accepted' : 'compare',
         });
       } catch (e: any) {
         appendMessage({ role: 'system', content: e.message, status: 'error' });
@@ -914,59 +953,72 @@ export default function AgentModePage() {
     const multi3Start = parseMulti3Command(trimmed);
     if (multi3Start.kind === 'start') {
       setSending(true);
-      const asstId = appendMessage({
-        role: 'assistant',
-        content: `Multi-IA iniciada (${multi3Start.providers.join(', ')}) — ${multi3Start.command}${multi3Start.args ? ` ${multi3Start.args}` : ''}`,
-        status: 'running',
-        command: '/3',
-        multi3Phase: 'running',
-      });
-      try {
-        const models: Partial<Record<AIProvider, string>> = {};
-        for (const p of multi3Start.providers) {
-          models[p] = settings?.models?.[p]?.[0] || selectedModel;
-        }
-        const res = await fetch(`/api/chapters/${chapterId}/multi3`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildMulti3ApiBody(multi3Start, selectedVersionId, models)),
+        const models = resolveMulti3Models(multi3Start.providers, settings);
+        const modelSummary = multi3Start.providers.map((p) => `${p}/${models[p]}`).join(', ');
+        const asstId = appendMessage({
+          role: 'assistant',
+          content: `Multi-IA iniciada (${modelSummary}) — ${multi3Start.command}${multi3Start.args ? ` ${multi3Start.args}` : ''}`,
+          status: 'running',
+          command: '/3',
+          multi3Phase: 'running',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Falha ao iniciar Multi-IA');
+      try {
+        const apiBody = buildMulti3ApiBody(multi3Start, selectedVersionId, models);
+        const base = `/api/chapters/${chapterId}/multi3`;
+        const sessionId = await startMulti3WithRun(base, apiBody);
+        const runUrl = `${base}/${sessionId}/run`;
 
-        const sessionId = data.session.id;
         updateMessage(asstId, { multi3SessionId: sessionId });
 
         const finalSession = await pollMulti3Session(
           `/api/chapters/${chapterId}/multi3/${sessionId}`,
           (s) => {
             setActiveMulti3Session(s);
-            updateMessage(asstId, {
-              content: `Multi-IA: ${s.status} — ${s.candidates.filter((c: any) => c.status === 'completed').length}/${s.providers.length} concluídas`,
-            });
-          }
+            updateMessage(asstId, { content: formatMulti3Progress(s) });
+          },
+          3000,
+          45 * 60 * 1000,
+          runUrl
         );
 
         setActiveMulti3Session(finalSession);
         setMulti3PanelOpen(true);
-        await refreshVersions();
+        await Promise.all([refreshVersions(), refreshMulti3Sessions()]);
 
-        if (finalSession.status === 'awaiting_human') {
+        if (finalSession.status === 'accepted' || finalSession.status === 'awaiting_human') {
+          const winnerLabel = finalSession.winnerProvider || '—';
           updateMessage(asstId, {
             status: 'success',
-            content: `Comparação pronta. Juiz recomenda: ${finalSession.winnerProvider}. ${finalSession.judgeReasoning || ''}`,
-            multi3Phase: 'compare',
+            content: finalSession.status === 'accepted' && finalSession.command !== '/perguntar'
+              ? `Multi-IA concluída. Versão ${winnerLabel} salva como ativa. Todas as versões estão no histórico Multi-IA. ${finalSession.judgeReasoning || ''}`
+              : `Comparação pronta. Juiz recomenda: ${winnerLabel}. ${finalSession.judgeReasoning || ''}`,
+            multi3Phase: finalSession.status === 'accepted' ? 'accepted' : 'compare',
             multi3SessionId: sessionId,
           });
-          toast.success('Multi-IA concluída — abra o painel de comparação');
+          toast.success(
+            finalSession.status === 'accepted' && finalSession.command !== '/perguntar'
+              ? `Versão ${winnerLabel} ativada automaticamente`
+              : 'Multi-IA concluída — compare os resultados'
+          );
         } else if (finalSession.status === 'failed') {
-          updateMessage(asstId, { status: 'error', content: 'Multi-IA falhou.' });
+          const errMsg = getMulti3FailureMessage(finalSession);
+          updateMessage(asstId, { status: 'error', content: errMsg });
+          toast.error(getAIErrorMessage(errMsg, errMsg));
         }
       } catch (e: any) {
         updateMessage(asstId, { status: 'error', content: e.message });
       } finally {
         setSending(false);
       }
+      return;
+    }
+
+    if (trimmed.toLowerCase().startsWith('/3')) {
+      appendMessage({
+        role: 'system',
+        content: explainMulti3ParseFailure(trimmed),
+        status: 'error',
+      });
       return;
     }
 
@@ -1263,6 +1315,13 @@ export default function AgentModePage() {
             )}
           </Button>
 
+          <Link href="/commands">
+            <Button variant="ghost" size="sm" className="text-gray-400 hover:text-white gap-1.5 text-xs h-9" title="Lista de comandos">
+              <Terminal className="h-4 w-4" />
+              <span className="hidden md:inline">Comandos</span>
+            </Button>
+          </Link>
+
           {/* Toggle document panel */}
           <Button variant="ghost" size="sm" onClick={() => setShowDoc((s) => !s)} className="text-gray-400 hover:text-white" title={showDoc ? 'Ocultar documento' : 'Mostrar documento'}>
             {showDoc ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
@@ -1433,13 +1492,19 @@ export default function AgentModePage() {
                   </Button>
                 </div>
                 <div className="flex items-center justify-between mt-2 px-1">
-                  <button
-                    onClick={() => setShowCommandHelp((s) => !s)}
-                    className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1.5"
-                  >
-                    <Sparkles className="h-3 w-3" />
-                    Comandos disponíveis
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setShowCommandHelp((s) => !s)}
+                      className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1.5"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Comandos disponíveis
+                    </button>
+                    <Link href="/commands" className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+                      <Terminal className="h-3 w-3" />
+                      Ver lista completa
+                    </Link>
+                  </div>
                   <span className="text-xs text-gray-600">Enter para enviar · Shift+Enter nova linha</span>
                 </div>
                 {showCommandHelp && (
@@ -1460,6 +1525,13 @@ export default function AgentModePage() {
                         <span className="text-gray-500 ml-auto truncate">{c.description}</span>
                       </button>
                     ))}
+                    <Multi3CommandHelp
+                      onPick={(cmd) => {
+                        setInput(cmd);
+                        setShowCommandHelp(false);
+                        inputRef.current?.focus();
+                      }}
+                    />
                   </div>
                 )}
               </div>
@@ -1467,38 +1539,66 @@ export default function AgentModePage() {
           </div>
         </div>
 
-        {/* ── History panel ───────────────────────────────────────────────────── */}
+        {/* ── History bottom sheet ───────────────────────────────────────────── */}
         {showHistory && (
-          <div className="flex-shrink-0 border-t border-white/10 bg-black/30 backdrop-blur" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-            <div className="flex items-center justify-between px-6 py-2 border-b border-white/10 sticky top-0 bg-black/60 backdrop-blur z-10">
-              <div className="flex items-center gap-2 text-xs text-gray-400">
-                <History className="h-3.5 w-3.5 text-red-400" />
-                <span className="font-medium text-white">Histórico de Versões</span>
-                <Badge className="bg-white/10 text-gray-400 text-[10px] px-1.5">{versions.length}</Badge>
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-black/50 backdrop-blur-[2px]"
+              onClick={() => setShowHistory(false)}
+              aria-hidden
+            />
+            <div className="fixed inset-x-0 bottom-0 z-50 flex flex-col border-t border-white/10 bg-gray-950/98 backdrop-blur-xl rounded-t-2xl shadow-[0_-8px_40px_rgba(0,0,0,0.5)] h-[min(72vh,680px)]">
+              <div className="flex items-center justify-center pt-2 pb-1 flex-shrink-0">
+                <div className="w-10 h-1 rounded-full bg-white/20" />
               </div>
-              <Button
-                variant="ghost" size="sm"
-                onClick={() => setShowHistory(false)}
-                className="h-6 w-6 p-0 text-gray-500 hover:text-white"
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <div className="px-4 py-3">
-              <VersionHistory
-                versions={versions}
-                chapterId={chapterId}
-                showHeader={false}
-                onVersionDeleted={async (deletedId) => {
-                  const fresh = await refreshVersions();
-                  if (selectedVersionId === deletedId) {
-                    const newest = fresh[fresh.length - 1];
-                    if (newest) setSelectedVersionId(newest.id);
+              <div className="flex items-center justify-between px-6 py-2 border-b border-white/10 flex-shrink-0">
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                  <History className="h-4 w-4 text-red-400" />
+                  <span className="font-medium text-white text-sm">Histórico de Versões</span>
+                  <Badge className="bg-white/10 text-gray-400 text-[10px] px-1.5">{versions.length}</Badge>
+                  {multi3Sessions.length > 0 && (
+                    <Badge className="bg-indigo-500/15 text-indigo-400 text-[10px] px-1.5">
+                      {multi3Sessions.length} Multi-IA
+                    </Badge>
+                  )}
+                </div>
+                <Button
+                  variant="ghost" size="sm"
+                  onClick={() => setShowHistory(false)}
+                  className="h-8 w-8 p-0 text-gray-500 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-4 py-3 min-h-0">
+                <VersionHistory
+                  versions={versions}
+                  chapterId={chapterId}
+                  showHeader={false}
+                  multi3Sessions={multi3Sessions}
+                  onOpenMulti3Session={openMulti3SessionFromHistory}
+                onReprocessMulti3Session={async (session) => {
+                  try {
+                    toast.info('Reprocessando Multi-IA...');
+                    await fetch(`/api/chapters/${chapterId}/multi3/${session.id}/run`, { method: 'POST' });
+                    await refreshMulti3Sessions();
+                    toast.success('Processamento iniciado — aguarde no histórico');
+                  } catch (e: any) {
+                    toast.error(e.message || 'Falha ao reprocessar');
                   }
                 }}
-              />
+                  onVersionDeleted={async (deletedId) => {
+                    const fresh = await refreshVersions();
+                    await refreshMulti3Sessions();
+                    if (selectedVersionId === deletedId) {
+                      const newest = fresh[fresh.length - 1];
+                      if (newest) setSelectedVersionId(newest.id);
+                    }
+                  }}
+                />
+              </div>
             </div>
-          </div>
+          </>
         )}
       </div>
 
@@ -1524,9 +1624,8 @@ export default function AgentModePage() {
           onClose={() => setMulti3PanelOpen(false)}
           onAccepted={async (session) => {
             setActiveMulti3Session(session);
-            setMulti3PanelOpen(false);
-            await refreshVersions();
-            toast.success('Versão vencedora ativada!');
+            await Promise.all([refreshVersions(), refreshMulti3Sessions()]);
+            toast.success(`Versão ${session.winnerProvider} ativada`);
           }}
           onSessionUpdate={setActiveMulti3Session}
         />
@@ -1660,6 +1759,19 @@ function MessageBubble({
                   >
                     <Ban className="h-3 w-3" />
                     Cancelar
+                  </button>
+                )}
+                {message.multi3SessionId && message.command === '/3' && (
+                  <button
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      if (!confirm('Cancelar Multi-IA? A operação para na próxima chamada à IA.')) return;
+                      await cancelJobRequest(message.multi3SessionId!, 'multi3');
+                    }}
+                    className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-red-400 transition-colors"
+                  >
+                    <Ban className="h-3 w-3" />
+                    Cancelar Multi-IA
                   </button>
                 )}
               </>

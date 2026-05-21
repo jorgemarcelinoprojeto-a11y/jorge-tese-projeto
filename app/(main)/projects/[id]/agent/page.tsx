@@ -10,7 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   ArrowLeft, Send, FileText, PanelLeftClose, PanelLeftOpen, Sparkles,
   Loader2, Trash2, Languages, Wand2, Sliders, SearchCheck,
-  CheckCircle2, AlertCircle, Bot, User as UserIcon, Download, Folder, Cpu, ExternalLink, Ban
+  CheckCircle2, AlertCircle, Bot, User as UserIcon, Download, Folder, Cpu, ExternalLink, Ban, Terminal
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -18,7 +18,12 @@ import { AIErrorBanner } from '@/components/ai-error-banner';
 import { classifyAIError } from '@/lib/ai-error-message';
 import { cancelJobRequest } from '@/components/jobs-status-button';
 import { Multi3ComparePanel } from '@/components/multi-ai/multi3-compare-panel';
-import { parseMulti3Command, buildMulti3ApiBody, pollMulti3Session } from '@/lib/agent/multi3-client';
+import { Multi3CommandHelp } from '@/components/multi-ai/multi3-command-help';
+import { parseMulti3Command, buildMulti3ApiBody, pollMulti3Session, startMulti3WithRun, formatMulti3Progress, getMulti3FailureMessage, explainMulti3ParseFailure } from '@/lib/agent/multi3-client';
+import { resolveMulti3Models } from '@/lib/multi-ai/models';
+import { getAIErrorMessage } from '@/lib/ai-error-message';
+import { cancelJobRequest } from '@/components/jobs-status-button';
+import { MULTI3_SHORT_DESCRIPTION } from '@/lib/agent/command-reference';
 import type { Multi3Session } from '@/lib/multi-ai/types';
 
 type AIProvider = 'openai' | 'gemini' | 'grok' | 'anthropic';
@@ -86,7 +91,7 @@ const COMMANDS: SlashCommand[] = [
   { name: '/ajustar',   args: '<instruções>', example: '/ajustar expandir a conclusão',   description: 'Aplica uma edição: IA cria uma nova versão',     icon: <Sliders     className="h-4 w-4" />, color: 'text-orange-400' },
   { name: '/revisar',   args: '',             example: '/revisar',                        description: 'Verifica se leis citadas continuam vigentes',     icon: <SearchCheck className="h-4 w-4" />, color: 'text-yellow-400' },
   { name: '/todos',     args: '',             example: '/todos',                          description: 'Traduz para português, adapta e revisa normas em sequência', icon: <Sparkles className="h-4 w-4" />, color: 'text-red-400' },
-  { name: '/3',         args: '<ias> <cmd>',  example: '/3 gemini openai claude /ajustar expandir', description: '3 IAs em paralelo → comparação → juiz', icon: <Cpu className="h-4 w-4" />, color: 'text-indigo-400' },
+  { name: '/3',         args: '<ias> <cmd>',  example: '/3 gemini openai claude /ajustar expandir', description: MULTI3_SHORT_DESCRIPTION, icon: <Cpu className="h-4 w-4" />, color: 'text-indigo-400' },
   { name: '/limpar',    args: '',             example: '/limpar',                         description: 'Limpa a conversa',                                  icon: <Trash2      className="h-4 w-4" />, color: 'text-gray-400' },
 ];
 
@@ -397,33 +402,55 @@ export default function ProjectAgentPage() {
         command: '/3',
       });
       try {
-        const models: Partial<Record<AIProvider, string>> = {};
-        for (const p of multi3Start.providers) {
-          models[p] = settings?.models?.[p]?.[0] || selectedModel;
-        }
-        const res = await fetch(`/api/documents/${selectedDocId}/multi3`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildMulti3ApiBody(multi3Start, selectedDocId, models)),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
+        const models = resolveMulti3Models(multi3Start.providers, settings);
+        const apiBody = buildMulti3ApiBody(multi3Start, selectedDocId, models);
+        const base = `/api/documents/${selectedDocId}/multi3`;
+        const sessionId = await startMulti3WithRun(base, apiBody);
+        const runUrl = `${base}/${sessionId}/run`;
 
         const finalSession = await pollMulti3Session(
-          `/api/documents/${selectedDocId}/multi3/${data.session.id}`,
-          setActiveMulti3Session
+          `${base}/${sessionId}`,
+          (s) => {
+            setActiveMulti3Session(s);
+            updateMessage(asstId, { content: formatMulti3Progress(s) });
+          },
+          3000,
+          45 * 60 * 1000,
+          runUrl
         );
         setActiveMulti3Session(finalSession);
         setMulti3PanelOpen(true);
-        updateMessage(asstId, {
-          status: 'success',
-          content: `Comparação pronta. Juiz recomenda: ${finalSession.winnerProvider}. ${finalSession.judgeReasoning || ''}`,
-        });
+
+        if (finalSession.status === 'accepted' || finalSession.status === 'awaiting_human') {
+          const winnerLabel = finalSession.winnerProvider || '—';
+          updateMessage(asstId, {
+            status: 'success',
+            content: finalSession.status === 'accepted' && finalSession.command !== '/perguntar'
+              ? `Multi-IA concluída. Versão ${winnerLabel} salva como ativa. ${finalSession.judgeReasoning || ''}`
+              : `Comparação pronta. Juiz recomenda: ${winnerLabel}. ${finalSession.judgeReasoning || ''}`,
+          });
+          if (finalSession.status === 'accepted' && finalSession.command !== '/perguntar') {
+            toast.success(`Versão ${winnerLabel} ativada automaticamente`);
+          }
+        } else if (finalSession.status === 'failed') {
+          const errMsg = getMulti3FailureMessage(finalSession);
+          updateMessage(asstId, { status: 'error', content: errMsg });
+          toast.error(getAIErrorMessage(errMsg, errMsg));
+        }
       } catch (e: any) {
         updateMessage(asstId, { status: 'error', content: e.message });
       } finally {
         setSending(false);
       }
+      return;
+    }
+
+    if (trimmed.toLowerCase().startsWith('/3')) {
+      appendMessage({
+        role: 'system',
+        content: explainMulti3ParseFailure(trimmed),
+        status: 'error',
+      });
       return;
     }
 
@@ -751,6 +778,13 @@ export default function ProjectAgentPage() {
             </Link>
           )}
 
+          <Link href="/commands">
+            <Button variant="ghost" size="sm" className="text-gray-400 hover:text-white gap-1.5 text-xs h-9" title="Lista de comandos">
+              <Terminal className="h-4 w-4" />
+              <span className="hidden md:inline">Comandos</span>
+            </Button>
+          </Link>
+
           <Button variant="ghost" size="sm" onClick={handleDownload} className="text-gray-400 hover:text-white" title="Baixar documento">
             <Download className="h-4 w-4" />
           </Button>
@@ -876,6 +910,13 @@ export default function ProjectAgentPage() {
                       <span className="text-gray-500 ml-auto">{c.description}</span>
                     </div>
                   ))}
+                  <Multi3CommandHelp
+                    onPick={(cmd) => {
+                      setInput(cmd);
+                      setShowCommandHelp(false);
+                      inputRef.current?.focus();
+                    }}
+                  />
                 </div>
               )}
             </div>
@@ -890,8 +931,7 @@ export default function ProjectAgentPage() {
           onClose={() => setMulti3PanelOpen(false)}
           onAccepted={(session) => {
             setActiveMulti3Session(session);
-            setMulti3PanelOpen(false);
-            toast.success('Versão vencedora aplicada ao documento!');
+            toast.success(`Versão ${session.winnerProvider} aplicada ao documento`);
           }}
           onSessionUpdate={setActiveMulti3Session}
         />

@@ -69,3 +69,26 @@ export async function persistDocumentVersion({
 
   return { filePath, pages, chunksCount: chunks.length };
 }
+
+/** Salva arquivo em versions/ sem alterar o documento ativo (candidatos Multi-IA). */
+export async function archiveDocumentCandidate(
+  documentId: string,
+  buffer: Buffer,
+  operation: string
+): Promise<string> {
+  const safeOperation = operation.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
+  const filePath = `documents/${documentId}/versions/${Date.now()}_${safeOperation}.docx`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('documents')
+    .upload(filePath, buffer, {
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      upsert: false,
+    });
+
+  if (uploadError) {
+    throw new Error(`Failed to archive document candidate: ${uploadError.message}`);
+  }
+
+  return filePath;
+}

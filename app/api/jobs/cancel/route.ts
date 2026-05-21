@@ -23,6 +23,17 @@ const TABLE_BY_TYPE: Record<string, string> = {
   'adapt':             'adapt_jobs',
   'improve':           'improvement_jobs',
   'norms-update':      'norm_update_jobs',
+  'multi3':            'multi_ai_sessions',
+};
+
+const RUNNING_STATUSES_BY_TABLE: Record<string, string[]> = {
+  chapter_operation_jobs: ['pending', 'processing', 'translating', 'adjusting', 'adapting', 'analyzing'],
+  translation_jobs: ['pending', 'processing', 'translating'],
+  adjust_jobs: ['pending', 'processing', 'adjusting'],
+  adapt_jobs: ['pending', 'processing', 'adapting'],
+  improvement_jobs: ['pending', 'processing', 'analyzing'],
+  norm_update_jobs: ['pending', 'processing'],
+  multi_ai_sessions: ['running', 'processing', 'candidates_ready', 'judging'],
 };
 
 export async function POST(req: NextRequest) {
@@ -40,15 +51,24 @@ export async function POST(req: NextRequest) {
     const table = TABLE_BY_TYPE[type];
     if (table) {
       try {
+        const runningStatuses = RUNNING_STATUSES_BY_TABLE[table] || ['pending', 'processing'];
+        const updatePayload = type === 'multi3'
+          ? {
+              status: 'failed',
+              judge_reasoning: `${CANCELLATION_MARKER} Cancelado pelo usuário antes da próxima chamada à IA.`,
+              completed_at: new Date().toISOString(),
+            }
+          : {
+              status: 'error',
+              error_message: `${CANCELLATION_MARKER} Cancelado pelo usuário antes da próxima chamada à IA.`,
+              completed_at: new Date().toISOString(),
+            };
+
         await supabase
           .from(table)
-          .update({
-            status: 'error',
-            error_message: `${CANCELLATION_MARKER} Cancelado pelo usuário antes da próxima chamada à IA.`,
-            completed_at: new Date().toISOString(),
-          })
+          .update(updatePayload)
           .eq('id', jobId)
-          .in('status', ['pending', 'processing', 'translating', 'adjusting', 'adapting', 'analyzing']);
+          .in('status', runningStatuses);
       } catch (e) {
         console.warn('[JOBS-CANCEL] DB update failed (non-fatal):', e);
       }

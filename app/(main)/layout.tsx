@@ -4,7 +4,7 @@ import Link from "next/link";
 import { UserMenu } from "@/components/user-menu";
 import { JobsStatusButton } from "@/components/jobs-status-button";
 import { usePathname } from "next/navigation";
-import { FileText, Settings } from "lucide-react";
+import { FileText, Settings, Terminal } from "lucide-react";
 
 export default function MainLayout({
   children,
@@ -122,6 +122,23 @@ export default function MainLayout({
                 <div className="relative flex items-center gap-2">
                   <FileText className="h-4 w-4" />
                   <span className="hidden sm:inline">Dashboard</span>
+                </div>
+              </Link>
+
+              <Link
+                href="/commands"
+                className={`relative px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  isActive("/commands")
+                    ? "text-white"
+                    : "text-gray-400 hover:text-white"
+                }`}
+              >
+                {isActive("/commands") && (
+                  <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/20 to-indigo-600/10 rounded-lg border border-indigo-500/20"></div>
+                )}
+                <div className="relative flex items-center gap-2">
+                  <Terminal className="h-4 w-4" />
+                  <span className="hidden sm:inline">Comandos</span>
                 </div>
               </Link>
 
