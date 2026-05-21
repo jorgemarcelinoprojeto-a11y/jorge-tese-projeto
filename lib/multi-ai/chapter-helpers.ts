@@ -76,6 +76,29 @@ export async function activateChapterVersion(chapterId: string, versionId: strin
   if (error) throw new Error(error.message);
 }
 
+export async function syncMulti3ChapterVersionRoles(
+  chapterId: string,
+  sessionId: string,
+  winnerVersionId: string
+): Promise<void> {
+  const { data: rows, error } = await supabase
+    .from('chapter_versions')
+    .select('id, metadata')
+    .eq('chapter_id', chapterId);
+
+  if (error || !rows) return;
+
+  for (const row of rows) {
+    const meta = (row.metadata || {}) as Record<string, unknown>;
+    if (meta.multi3SessionId !== sessionId) continue;
+    const role = row.id === winnerVersionId ? 'winner' : 'candidate';
+    await supabase
+      .from('chapter_versions')
+      .update({ metadata: { ...meta, multi3Role: role } })
+      .eq('id', row.id);
+  }
+}
+
 export async function getLatestChapterVersion(chapterId: string, preferredVersionId?: string) {
   let query = supabase
     .from('chapter_versions')

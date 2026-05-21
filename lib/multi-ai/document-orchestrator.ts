@@ -8,12 +8,15 @@ import os from 'os';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { supabase } from '@/lib/supabase';
-import { persistDocumentVersion } from '@/lib/document-versioning';
+import { persistDocumentVersion, archiveDocumentCandidate } from '@/lib/document-versioning';
 import {
   createMulti3Session,
   getMulti3Session,
   updateMulti3Session,
+  patchMulti3Candidate,
+  claimMulti3Execution,
   multi3DefaultModel,
+  isMulti3SessionStale,
 } from './session-store';
 import { judgeMulti3Results } from './judge';
 import { Multi3StartRequest, Multi3Session, Multi3Candidate } from './types';
@@ -22,6 +25,11 @@ import { chatWithAgent } from '@/lib/ai/agent-chat';
 import { extractDocumentStructure } from '@/lib/improvement/document-analyzer';
 import { processWholeDocument } from '@/lib/document-processing/whole-document';
 import { runTodosPipeline as runDocumentTodosPipeline } from '@/lib/todos/run-document-todos-pipeline';
+import { multi3CancelCheck, isCancelledError } from './cancel';
+import { getMulti3FailureMessage } from './errors';
+import { isQuotaExhausted } from '@/lib/ai-error-message';
+import { sanitizeMulti3Models } from './models';
+import { CANCELLATION_MARKER } from '@/lib/job-cancellation';
 
 async function downloadDocumentFile(documentId: string, filePath: string): Promise<string> {
   const { data, error } = await supabase.storage.from('documents').download(filePath);
@@ -35,22 +43,71 @@ export async function startDocumentMulti3(
   documentId: string,
   req: Multi3StartRequest
 ): Promise<Multi3Session> {
-  const models = req.models || {};
-  for (const p of req.providers) {
-    if (!models[p]) models[p] = multi3DefaultModel(p);
-  }
+  const models = sanitizeMulti3Models(req.providers, req.models || {});
 
   const session = await createMulti3Session('document', documentId, { ...req, models });
-
-  runDocumentMulti3Background(documentId, session.id, { ...req, models }).catch(async (err) => {
-    console.error(`[DOC-MULTI3 ${session.id}]`, err);
-    await updateMulti3Session(session.id, { status: 'failed', completedAt: new Date().toISOString() });
-  });
-
   return session;
 }
 
-async function runDocumentMulti3Background(
+export async function executeDocumentMulti3Session(
+  documentId: string,
+  sessionId: string
+): Promise<Multi3Session> {
+  const session = await getMulti3Session(sessionId);
+  if (!session) throw new Error('Sessão não encontrada');
+
+  if (['accepted', 'failed', 'awaiting_human'].includes(session.status)) {
+    return session;
+  }
+
+  const claimed = await claimMulti3Execution(sessionId);
+  if (!claimed) {
+    const current = await getMulti3Session(sessionId);
+    if (!current) throw new Error('Sessão não encontrada');
+
+    if (isMulti3SessionStale(current)) {
+      await updateMulti3Session(sessionId, { status: 'running' });
+      const reclaimed = await claimMulti3Execution(sessionId);
+      if (!reclaimed) throw new Error('Não foi possível retomar o processamento Multi-IA travado');
+    } else if (['processing', 'candidates_ready', 'judging'].includes(current.status)) {
+      return current;
+    } else {
+      throw new Error('Não foi possível iniciar o processamento Multi-IA');
+    }
+  }
+
+  const req: Multi3StartRequest & { models: Partial<Record<AIProvider, string>> } = {
+    providers: session.providers,
+    judgeProvider: session.judgeProvider,
+    command: session.command,
+    args: session.commandArgs,
+    versionId: session.parentVersionId || documentId,
+    models: Object.fromEntries(
+      session.candidates.map((c) => [c.provider, c.model])
+    ) as Partial<Record<AIProvider, string>>,
+  };
+
+  try {
+    await runDocumentMulti3Pipeline(documentId, sessionId, req);
+  } catch (err) {
+    console.error(`[DOC-MULTI3 ${sessionId}]`, err);
+    if (isCancelledError(err)) {
+      await updateMulti3Session(sessionId, {
+        status: 'failed',
+        completedAt: new Date().toISOString(),
+        judgeReasoning: `${CANCELLATION_MARKER} Cancelado pelo usuário.`,
+      });
+    } else {
+      await updateMulti3Session(sessionId, { status: 'failed', completedAt: new Date().toISOString() });
+    }
+    throw err;
+  }
+
+  const updated = await getMulti3Session(sessionId);
+  return updated!;
+}
+
+async function runDocumentMulti3Pipeline(
   documentId: string,
   sessionId: string,
   req: Multi3StartRequest & { models: Partial<Record<AIProvider, string>> }
@@ -60,7 +117,22 @@ async function runDocumentMulti3Background(
 
   const candidates = await Promise.all(
     req.providers.map(async (provider, branchIndex) => {
+      multi3CancelCheck(sessionId)();
       const model = req.models?.[provider] || multi3DefaultModel(provider);
+      await patchMulti3Candidate(sessionId, branchIndex, {
+        provider,
+        model,
+        status: 'running',
+        branchIndex,
+        progress: 5,
+        progressLabel: 'Iniciando...',
+      });
+
+      const done = async (candidate: Multi3Candidate) => {
+        await patchMulti3Candidate(sessionId, branchIndex, candidate);
+        return candidate;
+      };
+
       try {
         if (req.command === '/perguntar') {
           const tmp = await downloadDocumentFile(documentId, doc.file_path);
@@ -78,11 +150,11 @@ async function runDocumentMulti3Background(
             history: [],
             userMessage: `Documento:\n${docText}\n\nPergunta: ${req.args}`,
           });
-          return { provider, model, status: 'completed' as const, text, branchIndex, progress: 100 };
+          return done({ provider, model, status: 'completed' as const, text, branchIndex, progress: 100 });
         }
 
         if (req.command === '/todos') {
-          const result = await runDocumentTodosPipeline(documentId, doc, {
+          const todosResult = await runDocumentTodosPipeline(documentId, doc, {
             provider,
             model,
             targetLanguage: 'pt',
@@ -90,24 +162,31 @@ async function runDocumentMulti3Background(
             multi3Meta: { multi3SessionId: sessionId, multi3Provider: provider, multi3BranchIndex: branchIndex },
             deferPersist: true,
           });
-          const storagePath = `documents/${documentId}/multi3/${sessionId}/${provider}.docx`;
-          if (result.finalPath) {
-            const buffer = await fs.readFile(result.finalPath);
-            await supabase.storage.from('documents').upload(storagePath, buffer, {
-              contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-              upsert: true,
+          if (todosResult.finalPath) {
+            const buffer = await fs.readFile(todosResult.finalPath);
+            const archivedPath = await archiveDocumentCandidate(
+              documentId,
+              buffer,
+              `multi3_todos_${provider}`
+            );
+            return done({
+              provider,
+              model,
+              status: 'completed' as const,
+              text: todosResult.previewText,
+              branchIndex,
+              progress: 100,
+              versionIds: todosResult.stepPaths,
+              versionId: archivedPath,
             });
           }
-          return {
+          return done({
             provider,
             model,
-            status: 'completed' as const,
-            text: result.previewText,
+            status: 'failed' as const,
             branchIndex,
-            progress: 100,
-            versionIds: result.stepPaths,
-            versionId: storagePath,
-          };
+            error: 'Pipeline /todos não gerou arquivo final',
+          });
         }
 
         const inputPath = await downloadDocumentFile(documentId, doc.file_path);
@@ -127,34 +206,46 @@ async function runDocumentMulti3Background(
           });
 
           if (!whole.success) {
+            if (whole.error && (isQuotaExhausted(whole.error) || !whole.error.includes('size limit'))) {
+              throw new Error(whole.error);
+            }
             await fs.copyFile(inputPath, outputPath);
           }
 
           const buffer = await fs.readFile(outputPath);
-          const storagePath = `documents/${documentId}/multi3/${sessionId}/${provider}.docx`;
-          await supabase.storage.from('documents').upload(storagePath, buffer, {
-            contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            upsert: true,
-          });
+          const archivedPath = await archiveDocumentCandidate(
+            documentId,
+            buffer,
+            `multi3_${req.command.replace('/', '')}_${provider}`
+          );
 
           const { paragraphs } = await extractDocumentStructure(outputPath);
           const preview = paragraphs.map((p) => p.text).join('\n\n').slice(0, 8000);
 
-          return {
+          return done({
             provider,
             model,
             status: 'completed' as const,
             text: preview,
             branchIndex,
             progress: 100,
-            versionId: storagePath,
-          };
+            versionId: archivedPath,
+          });
         } finally {
           await fs.unlink(inputPath).catch(() => {});
           await fs.unlink(outputPath).catch(() => {});
         }
       } catch (error: any) {
-        return { provider, model, status: 'failed' as const, branchIndex, error: error.message };
+        if (isCancelledError(error)) {
+          return done({
+            provider,
+            model,
+            status: 'failed' as const,
+            branchIndex,
+            error: `${CANCELLATION_MARKER} Cancelado pelo usuário.`,
+          });
+        }
+        return done({ provider, model, status: 'failed' as const, branchIndex, error: error.message });
       }
     })
   );
@@ -163,7 +254,11 @@ async function runDocumentMulti3Background(
 
   const completed = candidates.filter((c) => c.status === 'completed');
   if (completed.length === 0) {
-    await updateMulti3Session(sessionId, { status: 'failed', completedAt: new Date().toISOString() });
+    await updateMulti3Session(sessionId, {
+      status: 'failed',
+      completedAt: new Date().toISOString(),
+      judgeReasoning: getMulti3FailureMessage({ candidates, status: 'failed' }),
+    });
     return;
   }
 
@@ -182,13 +277,14 @@ async function runDocumentMulti3Background(
   const winner = completed.find((c) => c.provider === judgeResult.winnerProvider) || completed[0];
 
   await updateMulti3Session(sessionId, {
-    status: 'awaiting_human',
     winnerProvider: winner.provider,
     winnerVersionId: winner.versionId,
     judgeReasoning: judgeResult.reasoning,
     judgeScores: judgeResult.scores,
     completedAt: new Date().toISOString(),
   });
+
+  await acceptDocumentMulti3Winner(sessionId, winner.provider);
 }
 
 export async function acceptDocumentMulti3Winner(

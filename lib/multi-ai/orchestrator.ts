@@ -6,7 +6,10 @@ import {
   createMulti3Session,
   getMulti3Session,
   updateMulti3Session,
+  patchMulti3Candidate,
+  claimMulti3Execution,
   multi3DefaultModel,
+  isMulti3SessionStale,
 } from './session-store';
 import { judgeMulti3Results } from './judge';
 import {
@@ -14,12 +17,19 @@ import {
   Multi3Session,
   Multi3Candidate,
   Multi3Command,
+  DEFAULT_JUDGE_PROVIDER,
 } from './types';
 import { AIProvider } from '@/lib/ai/types';
+import { multi3CancelCheck, isCancelledError } from './cancel';
+import { getMulti3FailureMessage } from './errors';
+import { sanitizeMulti3Models } from './models';
+import { isQuotaExhausted } from '@/lib/ai-error-message';
+import { CANCELLATION_MARKER } from '@/lib/job-cancellation';
 import {
   downloadChapterVersionFile,
   createChapterVersionFromFile,
   activateChapterVersion,
+  syncMulti3ChapterVersionRoles,
   extractVersionTextPreview,
   getApiKey,
 } from './chapter-helpers';
@@ -62,46 +72,122 @@ export async function startChapterMulti3(
   chapterId: string,
   req: Multi3StartRequest
 ): Promise<Multi3Session> {
-  const models = req.models || {};
-  for (const p of req.providers) {
-    if (!models[p]) models[p] = multi3DefaultModel(p);
-  }
+  const models = sanitizeMulti3Models(req.providers, req.models || {});
 
   const session = await createMulti3Session('chapter', chapterId, { ...req, models });
-
-  runChapterMulti3Background(chapterId, session.id, { ...req, models }).catch(async (err) => {
-    console.error(`[MULTI3 ${session.id}] Background error:`, err);
-    await updateMulti3Session(session.id, { status: 'failed', completedAt: new Date().toISOString() });
-  });
-
   return session;
 }
 
-async function runChapterMulti3Background(
+/** Executa pipeline Multi-IA (3 candidatos → juiz → aceitar vencedor). */
+export async function executeChapterMulti3Session(
+  chapterId: string,
+  sessionId: string
+): Promise<Multi3Session> {
+  const session = await getMulti3Session(sessionId);
+  if (!session) throw new Error('Sessão não encontrada');
+
+  if (['accepted', 'failed', 'awaiting_human'].includes(session.status)) {
+    return session;
+  }
+
+  const claimed = await claimMulti3Execution(sessionId);
+  if (!claimed) {
+    const current = await getMulti3Session(sessionId);
+    if (!current) throw new Error('Sessão não encontrada');
+
+    if (isMulti3SessionStale(current)) {
+      console.warn(`[MULTI3 ${sessionId}] Sessão travada — tentando retomar execução`);
+      await updateMulti3Session(sessionId, { status: 'running' });
+      const reclaimed = await claimMulti3Execution(sessionId);
+      if (!reclaimed) {
+        throw new Error('Não foi possível retomar o processamento Multi-IA travado');
+      }
+    } else if (['processing', 'candidates_ready', 'judging'].includes(current.status)) {
+      return current;
+    } else {
+      throw new Error('Não foi possível iniciar o processamento Multi-IA');
+    }
+  }
+
+  const req: Multi3StartRequest & { models: Partial<Record<AIProvider, string>> } = {
+    providers: session.providers,
+    judgeProvider: session.judgeProvider,
+    command: session.command,
+    args: session.commandArgs,
+    versionId: session.parentVersionId || '',
+    models: Object.fromEntries(
+      session.candidates.map((c) => [c.provider, c.model])
+    ) as Partial<Record<AIProvider, string>>,
+  };
+
+  if (!req.versionId) {
+    await updateMulti3Session(sessionId, { status: 'failed', completedAt: new Date().toISOString() });
+    throw new Error('Versão base não definida na sessão');
+  }
+
+  try {
+    await runChapterMulti3Pipeline(chapterId, sessionId, req);
+  } catch (err) {
+    console.error(`[MULTI3 ${sessionId}] Pipeline error:`, err);
+    if (isCancelledError(err)) {
+      await updateMulti3Session(sessionId, {
+        status: 'failed',
+        completedAt: new Date().toISOString(),
+        judgeReasoning: `${CANCELLATION_MARKER} Cancelado pelo usuário.`,
+      });
+    } else {
+      await updateMulti3Session(sessionId, { status: 'failed', completedAt: new Date().toISOString() });
+    }
+    throw err;
+  }
+
+  const updated = await getMulti3Session(sessionId);
+  return updated!;
+}
+
+async function runChapterMulti3Pipeline(
   chapterId: string,
   sessionId: string,
   req: Multi3StartRequest & { models: Partial<Record<AIProvider, string>> }
 ): Promise<void> {
-  const session = await getMulti3Session(sessionId);
-  if (!session) return;
+  const cancelCheck = multi3CancelCheck(sessionId);
 
   const candidates = await Promise.all(
-    req.providers.map((provider, branchIndex) =>
-      runSingleCandidate(chapterId, sessionId, req, provider, branchIndex)
-    )
+    req.providers.map(async (provider, branchIndex) => {
+      cancelCheck();
+      await patchMulti3Candidate(sessionId, branchIndex, {
+        provider,
+        model: req.models?.[provider] || multi3DefaultModel(provider),
+        status: 'running',
+        branchIndex,
+        progress: 5,
+        progressLabel: 'Iniciando...',
+      });
+
+      const result = await runSingleCandidate(chapterId, sessionId, req, provider, branchIndex);
+      console.log(`[MULTI3 ${sessionId}] Candidato ${provider}/${req.models?.[provider] || multi3DefaultModel(provider)} → ${result.status}`);
+      await patchMulti3Candidate(sessionId, branchIndex, result);
+      return result;
+    })
   );
 
+  cancelCheck();
   await updateMulti3Session(sessionId, { candidates, status: 'candidates_ready' });
 
   const completed = candidates.filter((c) => c.status === 'completed');
   if (completed.length === 0) {
-    await updateMulti3Session(sessionId, { status: 'failed', completedAt: new Date().toISOString() });
+    await updateMulti3Session(sessionId, {
+      status: 'failed',
+      completedAt: new Date().toISOString(),
+      judgeReasoning: getMulti3FailureMessage({ candidates, status: 'failed' }),
+    });
     return;
   }
 
+  cancelCheck();
   await updateMulti3Session(sessionId, { status: 'judging' });
 
-  const judgeProvider = req.judgeProvider || session.judgeProvider;
+  const judgeProvider = req.judgeProvider || DEFAULT_JUDGE_PROVIDER;
   const judgeModel = req.models?.[judgeProvider] || multi3DefaultModel(judgeProvider);
 
   const textByProvider: Record<string, string> = {};
@@ -139,13 +225,14 @@ async function runChapterMulti3Background(
   const winner = completed.find((c) => c.provider === judgeResult.winnerProvider) || completed[0];
 
   await updateMulti3Session(sessionId, {
-    status: 'awaiting_human',
     winnerProvider: winner.provider,
     winnerVersionId: winner.versionId,
     judgeReasoning: judgeResult.reasoning,
     judgeScores: judgeResult.scores,
     completedAt: new Date().toISOString(),
   });
+
+  await acceptMulti3Winner(sessionId, winner.provider);
 }
 
 async function runSingleCandidate(
@@ -163,19 +250,28 @@ async function runSingleCandidate(
       case '/todos':
         return await runTodosCandidate(chapterId, req.versionId, provider, model, meta, branchIndex);
       case '/perguntar':
-        return await runPerguntarCandidate(chapterId, req.versionId, provider, model, req.args || '', branchIndex);
+        return await runPerguntarCandidate(chapterId, req.versionId, provider, model, req.args || '', branchIndex, sessionId);
       case '/ajustar':
-        return await runAdjustCandidate(chapterId, req.versionId, provider, model, req.args || '', meta);
+        return await runAdjustCandidate(chapterId, req.versionId, provider, model, req.args || '', meta, sessionId);
       case '/adaptar':
-        return await runAdaptCandidate(chapterId, req.versionId, provider, model, req.args || '', meta);
+        return await runAdaptCandidate(chapterId, req.versionId, provider, model, req.args || '', meta, sessionId);
       case '/traduzir':
-        return await runTranslateCandidate(chapterId, req.versionId, provider, model, req.args || '', meta);
+        return await runTranslateCandidate(chapterId, req.versionId, provider, model, req.args || '', meta, sessionId);
       case '/revisar':
-        return await runRevisarCandidate(chapterId, req.versionId, provider, model, meta);
+        return await runRevisarCandidate(chapterId, req.versionId, provider, model, meta, sessionId);
       default:
         throw new Error(`Comando não suportado: ${req.command}`);
     }
   } catch (error: any) {
+    if (isCancelledError(error)) {
+      return {
+        provider,
+        model,
+        status: 'failed',
+        branchIndex,
+        error: `${CANCELLATION_MARKER} Cancelado pelo usuário.`,
+      };
+    }
     return {
       provider,
       model,
@@ -238,8 +334,10 @@ async function runPerguntarCandidate(
   provider: AIProvider,
   model: string,
   question: string,
-  branchIndex: number
+  branchIndex: number,
+  sessionId: string
 ): Promise<Multi3Candidate> {
+  multi3CancelCheck(sessionId)();
   const { data: ver } = await supabase
     .from('chapter_versions')
     .select('file_path')
@@ -280,8 +378,10 @@ async function runAdjustCandidate(
   provider: AIProvider,
   model: string,
   instructions: string,
-  meta: Record<string, unknown>
+  meta: Record<string, unknown>,
+  sessionId: string
 ): Promise<Multi3Candidate> {
+  const cancelCheck = multi3CancelCheck(sessionId);
   const { data: ver } = await supabase.from('chapter_versions').select('file_path').eq('id', versionId).single();
   if (!ver) throw new Error('Versão não encontrada');
 
@@ -297,6 +397,12 @@ async function runAdjustCandidate(
     });
 
     if (!whole.success) {
+      if (whole.error && isQuotaExhausted(whole.error)) {
+        throw new Error(whole.error);
+      }
+      if (whole.error && !whole.error.includes('size limit')) {
+        throw new Error(whole.error);
+      }
       const suggestions = await analyzeDocumentForAdjustments(
         inputPath,
         instructions,
@@ -304,7 +410,8 @@ async function runAdjustCandidate(
         provider,
         model,
         getApiKey(provider),
-        false
+        false,
+        cancelCheck
       );
       const docxSuggestions: ApplyDocxSuggestion[] = suggestions.map((s: any) => ({
         id: s.id,
@@ -344,16 +451,30 @@ async function runAdaptCandidate(
   provider: AIProvider,
   model: string,
   styleArg: string,
-  meta: Record<string, unknown>
+  meta: Record<string, unknown>,
+  sessionId: string
 ): Promise<Multi3Candidate> {
-  const styleKey = styleArg.toLowerCase().split(/\s+/)[0];
-  const style = STYLE_MAP[styleKey] || 'simplified';
+  const cancelCheck = multi3CancelCheck(sessionId);
+  const branchIndex = meta.multi3BranchIndex as number;
+  const styleKey = styleArg.toLowerCase().split(/\s+/)[0].normalize('NFD').replace(/\p{M}/gu, '');
+  const style = STYLE_MAP[styleKey] || STYLE_MAP[styleArg.toLowerCase().split(/\s+/)[0]] || 'simplified';
+
+  console.log(`[MULTI3 ${sessionId}] /adaptar ${provider}/${model} estilo=${style} (${styleArg})`);
 
   const { data: ver } = await supabase.from('chapter_versions').select('file_path').eq('id', versionId).single();
   if (!ver) throw new Error('Versão não encontrada');
 
   const inputPath = await downloadChapterVersionFile(versionId, ver.file_path, 'adapt');
   const outputPath = path.join(os.tmpdir(), `${randomUUID()}_adapt.docx`);
+
+  await patchMulti3Candidate(sessionId, branchIndex, {
+    provider,
+    model,
+    status: 'running',
+    branchIndex,
+    progress: 8,
+    progressLabel: `${provider} adaptando (${styleArg || style})`,
+  });
 
   try {
     const whole = await processWholeDocument(inputPath, outputPath, {
@@ -364,13 +485,32 @@ async function runAdaptCandidate(
     });
 
     if (!whole.success) {
+      if (whole.error && isQuotaExhausted(whole.error)) {
+        throw new Error(whole.error);
+      }
+      if (whole.error && !whole.error.includes('size limit')) {
+        throw new Error(whole.error);
+      }
       const suggestions = await analyzeDocumentForAdaptation(
         inputPath,
         style,
         undefined,
         provider,
         model,
-        getApiKey(provider)
+        getApiKey(provider),
+        async (_section, totalSections, batch, totalBatches) => {
+          const pct = Math.min(85, Math.round(((batch || 1) / (totalBatches || 1)) * 70 + 10));
+          await patchMulti3Candidate(sessionId, branchIndex, {
+            provider,
+            model,
+            status: 'running',
+            branchIndex,
+            progress: pct,
+            progressLabel: `Adaptando lote ${batch}/${totalBatches}`,
+          });
+        },
+        undefined,
+        cancelCheck
       );
       const docxSuggestions: ApplyDocxSuggestion[] = suggestions.map((s: any) => ({
         id: s.id,
@@ -378,10 +518,9 @@ async function runAdaptCandidate(
         improvedText: s.adaptedText || '',
       }));
       if (docxSuggestions.length === 0) {
-        await fs.copyFile(inputPath, outputPath);
-      } else {
-        await applySuggestionsToDocx(inputPath, outputPath, docxSuggestions);
+        throw new Error(whole.error || 'Adaptação não gerou alterações — verifique créditos e chaves de API.');
       }
+      await applySuggestionsToDocx(inputPath, outputPath, docxSuggestions);
     }
 
     const newVersionId = await createChapterVersionFromFile(
@@ -414,8 +553,10 @@ async function runTranslateCandidate(
   provider: AIProvider,
   model: string,
   langArg: string,
-  meta: Record<string, unknown>
+  meta: Record<string, unknown>,
+  sessionId: string
 ): Promise<Multi3Candidate> {
+  multi3CancelCheck(sessionId)();
   const lang = LANGUAGE_MAP[langArg.toLowerCase().split(/\s+/)[0]] || 'pt';
   const { data: ver } = await supabase.from('chapter_versions').select('file_path').eq('id', versionId).single();
   if (!ver) throw new Error('Versão não encontrada');
@@ -469,8 +610,10 @@ async function runRevisarCandidate(
   versionId: string,
   provider: AIProvider,
   model: string,
-  meta: Record<string, unknown>
+  meta: Record<string, unknown>,
+  sessionId: string
 ): Promise<Multi3Candidate> {
+  multi3CancelCheck(sessionId)();
   const { data: ver } = await supabase.from('chapter_versions').select('file_path').eq('id', versionId).single();
   if (!ver) throw new Error('Versão não encontrada');
 
@@ -557,21 +700,7 @@ export async function acceptMulti3Winner(
 
   if (session.targetType === 'chapter' && winner.versionId) {
     await activateChapterVersion(session.targetId, winner.versionId);
-
-    // Mark winner in metadata
-    const { data: ver } = await supabase
-      .from('chapter_versions')
-      .select('metadata')
-      .eq('id', winner.versionId)
-      .single();
-    if (ver) {
-      await supabase
-        .from('chapter_versions')
-        .update({
-          metadata: { ...(ver.metadata || {}), multi3Role: 'winner' },
-        })
-        .eq('id', winner.versionId);
-    }
+    await syncMulti3ChapterVersionRoles(session.targetId, sessionId, winner.versionId);
   }
 
   await updateMulti3Session(sessionId, {
@@ -631,13 +760,27 @@ export async function rejudgeMulti3Session(
   const winner = completed.find((c) => c.provider === judgeResult.winnerProvider) || completed[0];
 
   await updateMulti3Session(sessionId, {
-    status: 'awaiting_human',
     judgeProvider,
     winnerProvider: winner.provider,
     winnerVersionId: winner.versionId,
     judgeReasoning: judgeResult.reasoning,
     judgeScores: judgeResult.scores,
   });
+
+  if (session.command !== '/perguntar' && winner.versionId) {
+    if (session.targetType === 'document') {
+      const { acceptDocumentMulti3Winner } = await import('./document-orchestrator');
+      await acceptDocumentMulti3Winner(sessionId, winner.provider);
+    } else {
+      await acceptMulti3Winner(sessionId, winner.provider);
+    }
+  } else {
+    await updateMulti3Session(sessionId, {
+      status: 'accepted',
+      winnerProvider: winner.provider,
+      completedAt: new Date().toISOString(),
+    });
+  }
 
   const updated = await getMulti3Session(sessionId);
   return updated!;

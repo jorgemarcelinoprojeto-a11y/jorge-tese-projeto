@@ -53,6 +53,7 @@ export function Multi3ComparePanel({
 
   const completed = session.candidates.filter((c) => c.status === 'completed');
   const isTextOnly = session.command === '/perguntar';
+  const isAccepted = session.status === 'accepted';
 
   const handleAccept = async (provider?: AIProvider) => {
     try {
@@ -98,6 +99,9 @@ export function Multi3ComparePanel({
             <h2 className="text-lg font-semibold text-white">Comparação Multi-IA</h2>
             <p className="text-sm text-gray-400">
               {session.command}{session.commandArgs ? ` — ${session.commandArgs}` : ''}
+              {isAccepted && !isTextOnly && (
+                <span className="text-green-400"> · melhor versão salva automaticamente</span>
+              )}
             </p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose}>
@@ -146,8 +150,13 @@ export function Multi3ComparePanel({
                     </Badge>
                   </div>
                   {candidate.provider === session.winnerProvider && (
-                    <Badge className="w-fit bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
-                      Recomendado
+                    <Badge className={cn(
+                      'w-fit border',
+                      isAccepted
+                        ? 'bg-green-500/20 text-green-400 border-green-500/30'
+                        : 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+                    )}>
+                      {isAccepted ? 'Versão ativa' : 'Recomendado'}
                     </Badge>
                   )}
                 </CardHeader>
@@ -173,16 +182,18 @@ export function Multi3ComparePanel({
                           {candidate.versionIds.length} versão(ões) no branch /todos
                         </p>
                       )}
-                      {!isTextOnly && candidate.versionId && chapterId && (
+                      {!isTextOnly && candidate.versionId && (chapterId || documentId) && (
                         <Button
                           variant="outline"
                           size="sm"
                           className="w-full"
                           onClick={() => handleAccept(candidate.provider)}
-                          disabled={accepting}
+                          disabled={accepting || (isAccepted && candidate.provider === session.winnerProvider)}
                         >
                           <CheckCircle2 className="h-4 w-4 mr-2" />
-                          Escolher {PROVIDER_LABEL[candidate.provider]}
+                          {isAccepted && candidate.provider === session.winnerProvider
+                            ? 'Versão ativa'
+                            : `Usar ${PROVIDER_LABEL[candidate.provider]}`}
                         </Button>
                       )}
                     </>
@@ -194,6 +205,11 @@ export function Multi3ComparePanel({
         </ScrollArea>
 
         <div className="border-t border-white/10 px-6 py-4 flex flex-wrap items-center gap-3">
+          {!isTextOnly && (
+            <p className="text-xs text-gray-500 w-full sm:w-auto">
+              Todas as versões ficam no histórico Multi-IA. Compare aqui ou use <code className="text-gray-400">/comparar</code>.
+            </p>
+          )}
           {session.status === 'awaiting_human' && !isTextOnly && (
             <Button
               onClick={() => handleAccept()}
@@ -201,8 +217,13 @@ export function Multi3ComparePanel({
               className="bg-yellow-600 hover:bg-yellow-700"
             >
               {accepting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trophy className="h-4 w-4 mr-2" />}
-              Aceitar recomendação
+              Ativar recomendação
             </Button>
+          )}
+          {isAccepted && !isTextOnly && session.winnerProvider && (
+            <Badge className="bg-green-500/15 text-green-400 border-green-500/30">
+              Ativa: {PROVIDER_LABEL[session.winnerProvider]}
+            </Badge>
           )}
           <div className="flex items-center gap-2 ml-auto">
             <Select value={judgeProvider} onValueChange={(v) => setJudgeProvider(v as AIProvider)}>

@@ -10,6 +10,7 @@ export type Multi3Command =
 
 export type Multi3SessionStatus =
   | 'running'
+  | 'processing'
   | 'candidates_ready'
   | 'judging'
   | 'awaiting_human'
@@ -71,9 +72,11 @@ export const PROVIDER_ALIASES: Record<string, AIProvider> = {
   google: 'gemini',
   openai: 'openai',
   gpt: 'openai',
+  chatgpt: 'openai',
   claude: 'anthropic',
   anthropic: 'anthropic',
   grok: 'grok',
+  crok: 'grok',
   xai: 'grok',
 };
 

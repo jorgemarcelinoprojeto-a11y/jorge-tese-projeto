@@ -9,6 +9,7 @@ import {
 } from './types';
 import { AIProvider } from '@/lib/ai/types';
 import { randomUUID } from 'crypto';
+import { multi3DefaultModel } from './models';
 
 function rowToSession(row: Record<string, unknown>): Multi3Session {
   return {
@@ -74,6 +75,21 @@ export async function getMulti3Session(sessionId: string): Promise<Multi3Session
   return rowToSession(data);
 }
 
+export async function listMulti3Sessions(
+  targetType: 'chapter' | 'document',
+  targetId: string
+): Promise<Multi3Session[]> {
+  const { data, error } = await supabase
+    .from('multi_ai_sessions')
+    .select('*')
+    .eq('target_type', targetType)
+    .eq('target_id', targetId)
+    .order('created_at', { ascending: true });
+
+  if (error) throw new Error(error.message);
+  return (data || []).map((row) => rowToSession(row as Record<string, unknown>));
+}
+
 export async function updateMulti3Session(
   sessionId: string,
   updates: Partial<{
@@ -101,14 +117,58 @@ export async function updateMulti3Session(
   if (error) throw new Error(error.message);
 }
 
+export async function patchMulti3Candidate(
+  sessionId: string,
+  branchIndex: number,
+  candidate: Multi3Candidate
+): Promise<void> {
+  const session = await getMulti3Session(sessionId);
+  if (!session) return;
+  const candidates = session.candidates.map((c) =>
+    (c.branchIndex ?? session.providers.indexOf(c.provider)) === branchIndex ? candidate : c
+  );
+  await updateMulti3Session(sessionId, { candidates });
+}
+
+/** Sessão em processing/running sem candidato concluído — provável execução morta. */
+export function isMulti3SessionStale(session: Multi3Session, staleMs = 90_000): boolean {
+  if (!['running', 'processing'].includes(session.status)) return false;
+
+  const candidates = session.candidates || [];
+  const hasTerminal = candidates.some((c) => c.status === 'completed' || c.status === 'failed');
+  if (hasTerminal) return false;
+
+  const ageMs = Date.now() - new Date(session.createdAt).getTime();
+  return ageMs >= staleMs;
+}
+
+/** Evita execução duplicada: running → processing */
+export async function claimMulti3Execution(sessionId: string): Promise<boolean> {
+  const session = await getMulti3Session(sessionId);
+  if (!session) return false;
+
+  if (session.status === 'processing' && !isMulti3SessionStale(session)) {
+    return false;
+  }
+
+  if (!['running', 'processing'].includes(session.status)) {
+    return false;
+  }
+
+  const { data, error } = await supabase
+    .from('multi_ai_sessions')
+    .update({ status: 'processing' })
+    .eq('id', sessionId)
+    .in('status', ['running', 'processing'])
+    .select('id')
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  return !!data;
+}
+
 function defaultModel(provider: AIProvider): string {
-  const defaults: Record<AIProvider, string> = {
-    gemini: 'gemini-2.5-flash',
-    openai: 'gpt-5.4-mini',
-    anthropic: 'claude-sonnet-4-6',
-    grok: 'grok-3-mini',
-  };
-  return defaults[provider];
+  return multi3DefaultModel(provider);
 }
 
 export { defaultModel as multi3DefaultModel };

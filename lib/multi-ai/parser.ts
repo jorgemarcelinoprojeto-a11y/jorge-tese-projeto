@@ -118,3 +118,32 @@ export function isMulti3Command(raw: string): boolean {
   const parsed = parseMulti3Input(raw);
   return parsed.kind !== 'not_multi3';
 }
+
+const PROVIDER_HINT =
+  'gemini (ou google), openai (ou gpt), claude, grok (ou xai/crok)';
+
+/** When input starts with /3 but parseMulti3Input returns not_multi3, explain why. */
+export function explainMulti3ParseFailure(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.toLowerCase().startsWith('/3')) {
+    return `Use: /3 ${PROVIDER_HINT} /perguntar <pergunta>`;
+  }
+
+  const withoutPrefix = trimmed.slice(3).trim();
+  const tokens = withoutPrefix.split(/\s+/).filter(Boolean);
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.startsWith('/')) break;
+    if (!resolveProvider(t)) {
+      return `Provedor não reconhecido: "${t}". Use: ${PROVIDER_HINT}. Exemplo: /3 gemini openai claude /perguntar qual o tema do documento`;
+    }
+  }
+
+  const { providers } = parseProviders(tokens);
+  if (providers.length < 2) {
+    return `Informe pelo menos 2 provedores de IA. Exemplo: /3 gemini openai claude /perguntar qual o tema do documento`;
+  }
+
+  return `Não foi possível interpretar o comando /3. Exemplo: /3 gemini openai claude /perguntar qual o tema do documento`;
+}
