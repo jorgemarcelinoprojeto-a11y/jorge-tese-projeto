@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import mammoth from 'mammoth';
+import { parseDocument } from '@/lib/parsers';
+import path from 'path';
 
 export async function GET(
   req: NextRequest,
@@ -30,16 +31,11 @@ export async function GET(
     const arrayBuffer = await fileBlob.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    let text = '';
-    try {
-      const result = await mammoth.extractRawText({ buffer });
-      text = result.value;
-    } catch {
-      // If not a docx, try reading as plain text
-      text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\tÀ-ɏ]/g, ' ');
-    }
+    // Use parseDocument which handles PDF, DOCX, and TXT properly
+    const fileName = path.basename(version.file_path);
+    const { text, pages } = await parseDocument(buffer, fileName);
 
-    return NextResponse.json({ text, versionNumber: version.version_number });
+    return NextResponse.json({ text, pages, versionNumber: version.version_number });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
