@@ -16,6 +16,7 @@ import { detectNormsInDocument } from '@/lib/norms-update/norm-detector';
 import { verifyMultipleNorms } from '@/lib/norms-update/norm-verifier';
 import { applyNormUpdatesToDocx } from '@/lib/norms-update/apply-docx';
 import { NormReference } from '@/lib/norms-update/types';
+import { parsePDF } from '@/lib/parsers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -346,9 +347,82 @@ async function downloadVersionFile(versionId: string, filePath: string, label: s
     throw new Error(`Falha ao baixar versão ${versionId}: ${error?.message || 'erro desconhecido'}`);
   }
 
+  const buffer = Buffer.from(await fileBlob.arrayBuffer());
+  const ext = path.extname(filePath).toLowerCase();
   const tempPath = path.join(os.tmpdir(), `${versionId}_${label}_${randomUUID()}.docx`);
-  await fs.writeFile(tempPath, Buffer.from(await fileBlob.arrayBuffer()));
+
+  // If the file is a PDF, convert it to a simple DOCX so the pipeline can process it
+  if (ext === '.pdf') {
+    console.log(`[TODOS] Converting PDF to DOCX for pipeline processing: ${filePath}`);
+    const { text } = await parsePDF(buffer);
+    const docxBuffer = await createSimpleDocx(text);
+    await fs.writeFile(tempPath, docxBuffer);
+  } else {
+    await fs.writeFile(tempPath, buffer);
+  }
+
   return tempPath;
+}
+
+/**
+ * Creates a minimal valid DOCX file from plain text using JSZip.
+ * The DOCX format is a zip containing XML files.
+ */
+async function createSimpleDocx(text: string): Promise<Buffer> {
+  const zip = new JSZip();
+
+  // Split text into paragraphs
+  const paragraphs = text.split('\n').filter(line => line.trim().length > 0);
+
+  // Build paragraph XML
+  const paragraphsXml = paragraphs.map(p => {
+    const escaped = p
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return `<w:p><w:r><w:t xml:space="preserve">${escaped}</w:t></w:r></w:p>`;
+  }).join('');
+
+  // Minimal document.xml
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
+  xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+  xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"
+  xmlns:v="urn:schemas-microsoft-com:vml"
+  xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+  xmlns:w10="urn:schemas-microsoft-com:office:word"
+  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml">
+  <w:body>${paragraphsXml}</w:body>
+</w:document>`;
+
+  // Content Types
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`;
+
+  // Root relationships
+  const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+  // Word relationships
+  const wordRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+</Relationships>`;
+
+  zip.file('[Content_Types].xml', contentTypesXml);
+  zip.file('_rels/.rels', relsXml);
+  zip.file('word/document.xml', documentXml);
+  zip.file('word/_rels/document.xml.rels', wordRelsXml);
+
+  return Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
 }
 
 async function createChapterVersionFromFile(
